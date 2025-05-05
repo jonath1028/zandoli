@@ -1,0 +1,26 @@
+C8:D3:A3	Cisco Systems, Inc
+84:B8:02	Cisco Systems, Inc
+C4:04:15	Cisco Systems, Inc
+00:09:0F	Cisco Systems, Inc
+F4:CE:46	Fortinet, Inc.
+00:0C:29	Palo Alto Networks
+40:00:25	Palo Alto Networks
+00:09:0F	Sophos Ltd
+00:05:85	Juniper Networks
+00:30:1A	Juniper Networks
+00:1B:21	Juniper Networks
+C0:25:E9	Arista Networks
+8C:85:90	Sitehop Ltd
+AC:64:62	Hikvision Digital Technology Co.,Ltd.
+78:8A:20	Ubiquiti Networks Inc.
+FC:EC:DA	Ubiquiti Networks Inc.
+F0:9F:C2	SonicWall
+BC:D7:67	BAE Systems Applied Intelligence
+80:FA:5B	INTRACOM DEFENSE S.A.
+44:D9:E7	Mist Systems Inc
+C4:AD:34	Ruckus Wireless
+D8:07:B6	IoT Security Group, SL
+50:EC:50	Ajax Systems DMCC
+00:1F:29	ZVISION Technologies Co., Ltd
+00:17:0C	Quickset Defense Technologies, LLC
+

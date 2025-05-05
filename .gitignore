@@ -1,0 +1,22 @@
+# Binaire compilé
+zandoli
+
+# Logs
+log/
+*.log
+
+# Résultats d'analyse
+output/
+*.pcap
+
+# OS
+.DS_Store
+
+# Test
+test-output*/
+
+# Backup
+*.bak
+
+# script 
+script/

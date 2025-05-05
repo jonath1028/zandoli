@@ -1,0 +1,31 @@
+# Interface réseau à utiliser
+iface: eth0
+
+# Durée du scan passif (en secondes)
+passive_duration: 60
+
+# Répertoire de sortie pour les résultats
+output_dir: output
+
+# Fichier de log
+log_file: log/zandoli.log
+
+# niveau d affichage de log 
+log_level: debug  # trace | debug | info | warn | error | fatal | panic | disabled
+
+
+# Liste d’IP à exclure du scan actif
+exclude_ips:
+  - 192.168.0.1
+  - 192.168.0.254
+
+# Mode de scan global
+scan:
+  mode: active         # passive | active | combined | pcap
+  active_type: stealth   # standard | stealth (valide seulement si mode = active ou combined)
+
+# Paramètres pour le scan ARP furtif
+stealth_scan:
+  max_requests_per_second: 3
+  max_requests_per_burst: 10
+  burst_interval_seconds: 25

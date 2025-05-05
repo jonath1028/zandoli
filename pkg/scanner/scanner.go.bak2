@@ -1,0 +1,212 @@
+package scanner
+
+import (
+        "math/rand"
+        "net"
+        "time"
+
+        "github.com/google/gopacket"
+        "github.com/google/gopacket/layers"
+        "github.com/google/gopacket/pcap"
+        pb "github.com/cheggaaa/pb/v3"
+
+        "zandoli/pkg/logger"
+        "zandoli/pkg/oui"
+        "zandoli/pkg/sniffer"
+        "zandoli/pkg/utils"
+)
+
+// ==========================
+// 🔍 Standard ARP Scan
+// ==========================
+
+func ScanARP(ifaceName string) {
+        _, localIP, localMAC := utils.GetInterfaceInfo(ifaceName)
+        subnet := utils.GetLocalSubnet(localIP, ifaceName)
+
+        logger.Logger.Info().Msgf("Starting active ARP scan on %s [%s]", ifaceName, subnet.String())
+
+        stop := make(chan struct{})
+        go sniffer.CaptureARPReplies(ifaceName, stop)
+
+        handle, err := pcap.OpenLive(ifaceName, 65536, false, pcap.BlockForever)
+        if err != nil {
+                logger.Logger.Error().Err(err).Msg("Failed to open interface for active scan")
+                return
+        }
+        defer handle.Close()
+
+        total := 0
+        for ip := range iterateIPs(subnet) {
+                if !ip.Equal(localIP) && !sniffer.IsAlreadyKnown(ip) {
+                        total++
+                }
+        }
+
+        bar := pb.New(total)
+        bar.SetMaxWidth(60)
+        bar.SetTemplate(pb.Simple)
+        bar.Set("prefix", "🔍 Active Scan: ")
+        bar.Start()
+
+        for ip := range iterateIPs(subnet) {
+                if ip.Equal(localIP) || sniffer.IsAlreadyKnown(ip) {
+                        continue
+                }
+
+                mac := utils.GetMACFromARP(ip, handle, localMAC, localIP)
+                if mac == nil || sniffer.IsMACKnown(mac) {
+                        logger.Logger.Debug().Msgf("[SKIP] MAC already seen passively or nil: %s (IP %s)", mac, ip)
+                        bar.Increment()
+                        continue
+                }
+                if oui.IsFiltered(mac.String()) {
+                        logger.Logger.Debug().Msgf("[FILTER] Skipping IP %s (MAC: %s)", ip, mac)
+                        bar.Increment()
+                        continue
+                }
+
+                sendARP(handle, ip, localMAC, localIP)
+                bar.Increment()
+                time.Sleep(10 * time.Millisecond)
+        }
+
+        bar.Finish()
+
+        logger.Logger.Info().Msg("[ARP] Waiting briefly for final responses...")
+        time.Sleep(1 * time.Second)
+        close(stop)
+        logger.Logger.Info().Msg("Active ARP scan complete")
+}
+
+// ==========================
+// 🕵 Stealth ARP Scan
+// ==========================
+
+func ScanARPStealth(ifaceName string) {
+        logger.Logger.Info().Msg("[STEALTH] Starting stealth ARP scan...")
+
+        _, localIP, localMAC := utils.GetInterfaceInfo(ifaceName)
+        subnet := utils.GetLocalSubnet(localIP, ifaceName)
+
+        handle, err := pcap.OpenLive(ifaceName, 65536, false, pcap.BlockForever)
+        if err != nil {
+                logger.Logger.Error().Err(err).Msg("Failed to open interface for stealth scan")
+                return
+        }
+        defer handle.Close()
+
+        stop := make(chan struct{})
+        go sniffer.CaptureARPReplies(ifaceName, stop)
+
+        // === Count IPs to scan
+        total := 0
+        for ip := range iterateIPs(subnet) {
+                if !ip.Equal(localIP) && !sniffer.IsAlreadyKnown(ip) {
+                        total++
+                }
+        }
+
+        bar := pb.New(total)
+        bar.SetMaxWidth(60)
+        bar.SetTemplate(pb.Simple)
+        bar.Set("prefix", "🕵 Stealth Scan: ")
+        bar.Start()
+
+        ipChan := iterateIPs(subnet)
+        burst := []net.IP{}
+
+        for ip := range ipChan {
+                if ip.Equal(localIP) || sniffer.IsAlreadyKnown(ip) {
+                        continue
+                }
+
+                mac := utils.GetMACFromARP(ip, handle, localMAC, localIP)
+                if mac == nil || sniffer.IsMACKnown(mac) {
+                        logger.Logger.Debug().Msgf("[STEALTH][SKIP] MAC already seen or nil: %s (IP %s)", mac, ip)
+                        continue
+                }
+                if oui.IsFiltered(mac.String()) {
+                        logger.Logger.Debug().Msgf("[STEALTH][FILTER] Skipping IP %s (MAC: %s)", ip, mac)
+                        continue
+                }
+
+                burst = append(burst, ip)
+
+                if len(burst) >= 15 {
+                        sendStealthBurst(burst, handle, localMAC, localIP)
+                        bar.Add(len(burst))
+                        burst = []net.IP{}
+                        time.Sleep(time.Duration(rand.Intn(2000)+1000) * time.Millisecond)
+                }
+        }
+
+        if len(burst) > 0 {
+                sendStealthBurst(burst, handle, localMAC, localIP)
+                bar.Add(len(burst))
+        }
+
+        bar.Finish()
+
+        time.Sleep(500 * time.Millisecond)
+        close(stop)
+        logger.Logger.Info().Msg("[STEALTH] Stealth ARP scan complete.")
+}
+
+// ==========================
+// 🔧 Internal
+// ==========================
+
+func sendARP(handle *pcap.Handle, ip net.IP, mac net.HardwareAddr, localIP net.IP) {
+        eth := layers.Ethernet{
+                SrcMAC:       mac,
+                DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+                EthernetType: layers.EthernetTypeARP,
+        }
+        arp := layers.ARP{
+                AddrType:          layers.LinkTypeEthernet,
+                Protocol:          layers.EthernetTypeIPv4,
+                HwAddressSize:     6,
+                ProtAddressSize:   4,
+                Operation:         layers.ARPRequest,
+                SourceHwAddress:   mac,
+                SourceProtAddress: localIP.To4(),
+                DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
+                DstProtAddress:    ip.To4(),
+        }
+
+        buf := gopacket.NewSerializeBuffer()
+        opts := gopacket.SerializeOptions{}
+        _ = gopacket.SerializeLayers(buf, opts, &eth, &arp)
+        _ = handle.WritePacketData(buf.Bytes())
+}
+
+func sendStealthBurst(ips []net.IP, handle *pcap.Handle, mac net.HardwareAddr, localIP net.IP) {
+        for _, ip := range ips {
+                sendARP(handle, ip, mac, localIP)
+                delay := time.Duration(rand.Intn(250)+150) * time.Millisecond
+                time.Sleep(delay)
+        }
+}
+
+func iterateIPs(subnet *net.IPNet) <-chan net.IP {
+        ch := make(chan net.IP)
+        go func() {
+                defer close(ch)
+                for ip := subnet.IP.Mask(subnet.Mask); subnet.Contains(ip); incIP(ip) {
+                        tmp := make(net.IP, len(ip))
+                        copy(tmp, ip)
+                        ch <- tmp
+                }
+        }()
+        return ch
+}
+
+func incIP(ip net.IP) {
+        for j := len(ip) - 1; j >= 0; j-- {
+                ip[j]++
+                if ip[j] > 0 {
+                        break
+                }
+        }
+}

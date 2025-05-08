@@ -22,7 +22,7 @@ exclude_ips:
 # Mode de scan global
 scan:
   mode: active         # passive | active | combined | pcap
-  active_type: stealth   # standard | stealth (valide seulement si mode = active ou combined)
+  active_type: standard   # standard | stealth (valide seulement si mode = active ou combined)
 
 # Paramètres pour le scan ARP furtif
 stealth_scan:

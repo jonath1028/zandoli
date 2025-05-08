@@ -1,0 +1,92 @@
+package analyzer
+
+import (
+	"net"
+	"testing"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/sniffer"
+)
+
+func TestAnalyzeSMB_MinimalDetection(t *testing.T) {
+	tests := []struct {
+		name      string
+		payload   []byte
+		expectSMB bool
+	}{
+		{
+			name:      "SMBv1",
+			payload:   append([]byte("\xFFSMB"), make([]byte, 96)...),
+			expectSMB: true,
+		},
+		{
+			name:      "SMBv2",
+			payload:   append([]byte("\xFE\x53\x4D\x42"), make([]byte, 96)...),
+			expectSMB: true,
+		},
+		{
+			name:      "Not SMB",
+			payload:   []byte("HTTP /index.html"),
+			expectSMB: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sniffer.DiscoveredHosts = nil
+			srcIP := net.IPv4(192, 168, 1, 50)
+			dstIP := net.IPv4(192, 168, 1, 1)
+
+			eth := &layers.Ethernet{
+				SrcMAC:       net.HardwareAddr{0x00, 0x0c, 0x29, 0xaa, 0xbb, 0xcc},
+				DstMAC:       net.HardwareAddr{0x00, 0x0c, 0x29, 0xdd, 0xee, 0xff},
+				EthernetType: layers.EthernetTypeIPv4,
+			}
+
+			ip := &layers.IPv4{
+				Version:  4,
+				TTL:      64,
+				Protocol: layers.IPProtocolTCP,
+				SrcIP:    srcIP,
+				DstIP:    dstIP,
+			}
+
+			tcp := &layers.TCP{
+				SrcPort: layers.TCPPort(12345),
+				DstPort: layers.TCPPort(445),
+				Seq:     11050,
+			}
+			tcp.SetNetworkLayerForChecksum(ip)
+
+			buf := gopacket.NewSerializeBuffer()
+			opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+			err := gopacket.SerializeLayers(buf, opts,
+				eth, ip, tcp,
+				gopacket.Payload(tt.payload),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			packet := gopacket.NewPacket(buf.Bytes(), layers.LayerTypeEthernet, gopacket.Default)
+
+			// simulate host creation
+			host := sniffer.NewHost(srcIP, eth.SrcMAC, "passive")
+			sniffer.DiscoveredHosts = append(sniffer.DiscoveredHosts, host)
+
+			AnalyzeSMB(packet)
+
+			h := sniffer.FindHostByIP(srcIP)
+			if h == nil {
+				t.Fatal("host not found after SMB analysis")
+			}
+
+			saw := h.ProtocolsSeen["SMB"]
+			if saw != tt.expectSMB {
+				t.Errorf("expected SMB seen = %v, got %v", tt.expectSMB, saw)
+			}
+		})
+	}
+}
+

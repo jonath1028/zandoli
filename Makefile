@@ -1,10 +1,10 @@
 APP = zandoli
 
 build:
-	go build -o $(APP) ./cmd/main.go
+	go build -o $(APP) ./cmd/
 
 run:
-	go run ./cmd/main.go $(ARGS)
+	go run ./cmd/ $(ARGS)
 
 test:
 	go test ./...

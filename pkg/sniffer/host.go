@@ -53,7 +53,10 @@ func NewHost(ip net.IP, mac net.HardwareAddr, method string) Host {
 func FindHostByIP(ip net.IP) *Host {
 	for i := range DiscoveredHosts {
 		if DiscoveredHosts[i].IP.Equal(ip) {
+			logger.Logger.Debug().Msgf("[FindHostByIP] MATCH: %s", ip)
 			return &DiscoveredHosts[i]
+		} else {
+			logger.Logger.Debug().Msgf("[FindHostByIP] MISMATCH: wanted %s, got %s", ip, DiscoveredHosts[i].IP)
 		}
 	}
 	return nil

@@ -2,7 +2,6 @@ package analyzer
 
 import (
 	"net"
-	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -10,16 +9,14 @@ import (
 	"zandoli/pkg/sniffer"
 )
 
-// AnalyzeLLMNR analyse les requêtes LLMNR (UDP 5355)
 func AnalyzeLLMNR(packet gopacket.Packet) {
 	udpLayer := packet.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
 		return
 	}
-	udp, _ := udpLayer.(*layers.UDP)
+	udp := udpLayer.(*layers.UDP)
 
-	// Vérifie le port 5355 (LLMNR)
-	if udp.DstPort != 5355 && udp.SrcPort != 5355 {
+	if udp.SrcPort != 5355 && udp.DstPort != 5355 {
 		return
 	}
 
@@ -27,32 +24,27 @@ func AnalyzeLLMNR(packet gopacket.Packet) {
 	if dnsLayer == nil {
 		return
 	}
-	dns, _ := dnsLayer.(*layers.DNS)
+	dns := dnsLayer.(*layers.DNS)
 
-	// On traite uniquement les requêtes
-	if dns.QR {
+	if !dns.QR {
 		return
 	}
 
 	ipLayer := packet.NetworkLayer()
 	if ipLayer == nil {
+		logger.Logger.Debug().Msg("[LLMNR] No IP layer found")
 		return
 	}
 	srcIP := ipLayer.NetworkFlow().Src().Raw()
 
-	for _, q := range dns.Questions {
-		domain := strings.ToLower(string(q.Name))
-		sniffer.UpdateHostDNS(srcIP, domain)
-		sniffer.RegisterIP(srcIP)
-
-		// Marque le protocole comme observé
-		host := sniffer.FindHostByIP(net.IP(srcIP))
-		if host != nil {
-			host.ProtocolsSeen["LLMNR"] = true
-			sniffer.ClassifyHost(host)
-		}
-
-		logger.Logger.Debug().Msgf("[LLMNR] Request for %s from %v", domain, srcIP)
+	host := sniffer.FindHostByIP(net.IP(srcIP))
+	if host == nil {
+		logger.Logger.Debug().Msg("[LLMNR] Host not found")
+		return
 	}
+
+	host.ProtocolsSeen["LLMNR"] = true
+	sniffer.ClassifyHost(host)
+	logger.Logger.Debug().Msgf("[LLMNR] Protocol detected for host %s", host.IP)
 }
 

@@ -147,4 +147,3 @@ func GuessCategory(vendor string) string {
 		return "unknown"
 	}
 }
-

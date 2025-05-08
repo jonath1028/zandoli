@@ -43,4 +43,3 @@ func AnalyzeTopology(pkt gopacket.Packet) {
 		}
 	}
 }
-

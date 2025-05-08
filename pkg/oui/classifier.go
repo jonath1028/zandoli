@@ -86,4 +86,3 @@ func GetLabel(mac string) (LabelType, bool) {
 	}
 	return "unknown", false
 }
-

@@ -58,4 +58,3 @@ func isPrivateIP(ip net.IP) bool {
 	}
 	return false
 }
-

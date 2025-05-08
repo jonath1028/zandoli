@@ -83,4 +83,3 @@ func TestPacketSourceDrainBlocking(t *testing.T) {
 		t.Error("[ERROR] Blocking detected: packetSource likely holding up handle closure")
 	}
 }
-

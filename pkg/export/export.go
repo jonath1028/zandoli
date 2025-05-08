@@ -1,24 +1,24 @@
 package export
 
 import (
+	"fmt"
 	"encoding/csv"
 	"encoding/json"
-	"html/template"
 	"os"
 	"path/filepath"
-	"time"
 	"strings"
+	"time"
 
 	"zandoli/pkg/sniffer"
 )
 
 type ScanResult struct {
-	ScanTimestamp        string            `json:"scan_timestamp"`
-	Interface            string            `json:"interface"`
-	DurationPassiveSec   int               `json:"duration_passive_seconds"`
-	HostCount            map[string]int    `json:"host_count"`
-	Passive              []sniffer.Host    `json:"passive"`
-	Active               []sniffer.Host    `json:"active"`
+	ScanTimestamp      string         `json:"scan_timestamp"`
+	Interface          string         `json:"interface"`
+	DurationPassiveSec int            `json:"duration_passive_seconds"`
+	HostCount          map[string]int `json:"host_count"`
+	Passive            []sniffer.Host `json:"passive"`
+	Active             []sniffer.Host `json:"active"`
 }
 
 func ExportAll(hosts []sniffer.Host, outputDir string, iface string, duration int) error {
@@ -104,45 +104,52 @@ func exportHTML(hosts []sniffer.Host, path string) error {
 	}
 	defer file.Close()
 
-	const tmpl = `
-	<!DOCTYPE html>
-	<html>
-	<head>
-		<meta charset="UTF-8">
-		<title>Zandoli - Passive Scan Report</title>
-		<style>
-			body { font-family: sans-serif; padding: 20px; background: #f9f9f9; }
-			h2 { color: #2c3e50; }
-			table { border-collapse: collapse; width: 100%; }
-			th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-			th { background-color: #f0f0f0; }
-			tr:nth-child(even) { background-color: #fdfdfd; }
-			.mac { font-family: monospace; }
-			.detmethod { font-style: italic; color: #888; }
-		</style>
-	</head>
-	<body>
-	<h2>Discovered Hosts (Passive Mode)</h2>
-	<p>Total: {{len .}}</p>
-	<table>
-		<tr><th>#</th><th>IP Address</th><th>MAC Address</th><th>Timestamp</th><th>Detection</th></tr>
-		{{range $i, $h := .}}
-		<tr>
-			<td>{{add $i 1}}</td>
-			<td>{{$h.IP}}</td>
-			<td class="mac">{{$h.MAC}}</td>
-			<td>{{$h.Timestamp.Format "2006-01-02 15:04:05"}}</td>
-			<td class="detmethod">{{$h.DetectionMethod}}</td>
-		</tr>
-		{{end}}
-	</table>
-	</body>
-	</html>
-	`
+	// Compter le nombre de détections par type
+	countPassive := 0
+	countActive := 0
+	for _, h := range hosts {
+		switch strings.ToLower(h.DetectionMethod) {
+		case "passive":
+			countPassive++
+		case "active":
+			countActive++
+		}
+	}
 
-	t := template.New("report").Funcs(template.FuncMap{
-		"add": func(a, b int) int { return a + b },
-	})
-	t = template.Must(t.Parse(tmpl))
-	return t.Execute(file, hosts)
+	// Déterminer le titre
+	var title string
+	switch {
+	case countPassive > 0 && countActive > 0:
+		title = "Discovered Hosts (Combined Mode)"
+	case countPassive > 0:
+		title = "Discovered Hosts (Passive Mode)"
+	case countActive > 0:
+		title = "Discovered Hosts (Active Mode)"
+	default:
+		title = "Discovered Hosts"
+	}
+
+	// En-tête HTML
+	fmt.Fprintln(file, "<html><head><meta charset='utf-8'><style>")
+	fmt.Fprintln(file, "table {border-collapse: collapse; width: 100%;}")
+	fmt.Fprintln(file, "th, td {border: 1px solid #ddd; padding: 8px; font-family: monospace;}")
+	fmt.Fprintln(file, "th {background-color: #f2f2f2;}")
+	fmt.Fprintln(file, "</style></head><body>")
+
+	// Titre dynamique
+	fmt.Fprintf(file, "<h2>%s</h2>\n", title)
+	fmt.Fprintf(file, "<p>Total: %d | Passive: %d | Active: %d</p>\n", len(hosts), countPassive, countActive)
+
+	// Tableau
+	fmt.Fprintln(file, "<table>")
+	fmt.Fprintln(file, "<tr><th>#</th><th>IP Address</th><th>MAC Address</th><th>Timestamp</th><th>Detection</th></tr>")
+
+	for i, h := range hosts {
+		fmt.Fprintf(file, "<tr><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>\n",
+			i+1, h.IP.String(), h.MAC.String(), h.Timestamp.Format("2006-01-02 15:04:05"), h.DetectionMethod)
+	}
+
+	fmt.Fprintln(file, "</table></body></html>")
+	return nil
 }
+

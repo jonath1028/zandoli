@@ -49,4 +49,3 @@ func getTestInterface() string {
 	}
 	return "eth0"
 }
-

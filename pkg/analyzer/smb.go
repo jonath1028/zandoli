@@ -2,9 +2,7 @@ package analyzer
 
 import (
 	"bytes"
-	"encoding/binary"
 	"net"
-	"strings"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -12,7 +10,7 @@ import (
 	"zandoli/pkg/sniffer"
 )
 
-// AnalyzeSMB tente d'extraire des noms via le protocole SMB (TCP 445)
+// AnalyzeSMB marque simplement un hôte comme utilisant SMB si un paquet TCP 445 est vu
 func AnalyzeSMB(packet gopacket.Packet) {
 	tcpLayer := packet.Layer(layers.LayerTypeTCP)
 	if tcpLayer == nil {
@@ -20,74 +18,40 @@ func AnalyzeSMB(packet gopacket.Packet) {
 	}
 	tcp, _ := tcpLayer.(*layers.TCP)
 
-	// Port SMB direct
 	if tcp.DstPort != 445 && tcp.SrcPort != 445 {
 		return
 	}
 
-	// Analyse du payload brut
 	payload := tcp.Payload
-	if len(payload) < 100 {
+	if len(payload) < 4 {
 		return
 	}
 
-	// Recherche d'une chaîne Unicode potentielle
-	if name := extractSMBHostname(payload); name != "" {
-		ipLayer := packet.NetworkLayer()
-		if ipLayer == nil {
-			return
-		}
-		srcIP := ipLayer.NetworkFlow().Src().Raw()
-		sniffer.UpdateHostDNS(srcIP, name)
-		sniffer.RegisterIP(srcIP)
-
-		// Ajout du protocole SMB
-		host := sniffer.FindHostByIP(net.IP(srcIP))
-		if host != nil {
-			host.ProtocolsSeen["SMB"] = true
-			sniffer.ClassifyHost(host)
-		}
-
-		logger.Logger.Debug().Msgf("[SMB] Hostname from SMB: %s (%v)", name, srcIP)
+	ipLayer := packet.NetworkLayer()
+	if ipLayer == nil {
+		return
 	}
-}
+	srcIP := ipLayer.NetworkFlow().Src().Raw()
+	sniffer.RegisterIP(srcIP)
 
-// extractSMBHostname tente d’extraire une chaîne Unicode plausible
-func extractSMBHostname(data []byte) string {
-	// Recherche naïve d’un pattern Unicode (UCS2)
-	for i := 0; i < len(data)-32; i++ {
-		sub := data[i : i+32]
-		utf16 := make([]uint16, 16)
-		for j := 0; j < 16; j++ {
-			utf16[j] = binary.LittleEndian.Uint16(sub[j*2 : j*2+2])
-		}
-		str := decodeUTF16(utf16)
-		if isValidSMBName(str) {
-			return str
-		}
+	host := sniffer.FindHostByIP(net.IP(srcIP))
+	if host == nil {
+		return
 	}
-	return ""
-}
 
-// decodeUTF16 décode une suite UCS2 vers string
-func decodeUTF16(utf16 []uint16) string {
-	var buf bytes.Buffer
-	for _, r := range utf16 {
-		if r == 0 {
-			break
-		}
-		buf.WriteRune(rune(r))
+	// SMBv1 signature
+	if bytes.HasPrefix(payload, []byte("\xFFSMB")) {
+		host.ProtocolsSeen["SMB"] = true
+		sniffer.ClassifyHost(host)
+		logger.Logger.Debug().Msgf("[SMB] Detected SMBv1 from %s", srcIP)
+		return
 	}
-	return buf.String()
-}
 
-// isValidSMBName applique des heuristiques simples (longueur, printable, etc.)
-func isValidSMBName(s string) bool {
-	if len(s) < 3 || len(s) > 15 {
-		return false
+	// SMBv2/3 signature
+	if bytes.HasPrefix(payload, []byte("\xFE\x53\x4D\x42")) {
+		host.ProtocolsSeen["SMB"] = true
+		sniffer.ClassifyHost(host)
+		logger.Logger.Debug().Msgf("[SMB] Detected SMBv2/v3 from %s", srcIP)
 	}
-	return strings.IndexFunc(s, func(r rune) bool {
-		return r < 32 || r > 126
-	}) == -1
 }
 

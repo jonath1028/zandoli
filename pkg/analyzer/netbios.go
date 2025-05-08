@@ -64,4 +64,3 @@ func decodeNetBIOSName(data []byte) string {
 	trimmed := strings.TrimRight(string(decoded), "\x00 ")
 	return trimmed
 }
-

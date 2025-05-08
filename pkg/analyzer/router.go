@@ -17,11 +17,9 @@ var activeAnalyzers = []func(gopacket.Packet){
 	Handle8021X,
 }
 
-
 // HandlePacket appelle tous les analyzers sur le paquet
 func HandlePacket(packet gopacket.Packet) {
 	for _, analyzer := range activeAnalyzers {
 		analyzer(packet)
 	}
 }
-

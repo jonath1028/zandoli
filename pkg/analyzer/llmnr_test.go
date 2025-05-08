@@ -1,0 +1,54 @@
+package analyzer
+
+import (
+	"net"
+	"testing"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/sniffer"
+)
+
+func TestAnalyzeLLMNR_MinimalDetection(t *testing.T) {
+	// 1. Simuler une réponse LLMNR
+	llmnr := &dns.DNS{
+		ID:     0x1234,
+		QR:     true,
+		OpCode: 0,
+		QDCount: 1,
+		ANCount: 1,
+	}
+
+	udp := &layers.UDP{
+		SrcPort: 5355,
+		DstPort: 5355,
+	}
+	udp.SetNetworkLayerForChecksum(&layers.IPv4{SrcIP: net.IPv4(192, 168, 1, 42)})
+
+	eth := &layers.Ethernet{}
+	ip := &layers.IPv4{SrcIP: net.IPv4(192, 168, 1, 42), DstIP: net.IPv4(192, 168, 1, 1)}
+
+	buffer := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	gopacket.SerializeLayers(buffer, opts, eth, ip, udp, llmnr)
+	packet := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeEthernet, gopacket.Default)
+
+	// 2. Injecter l'hôte simulé
+	host := sniffer.NewHost(net.IPv4(192, 168, 1, 42), net.HardwareAddr{0x00, 0x0c, 0x29, 0xab, 0xcd, 0xef}, "test")
+	sniffer.DiscoveredHosts = append(sniffer.DiscoveredHosts, host)
+
+	// 3. Appeler l'analyseur
+	AnalyzeLLMNR(packet)
+
+	// 4. Vérifier l'état réel de l'hôte
+	found := sniffer.FindHostByIP(net.IPv4(192, 168, 1, 42))
+	if found == nil {
+		t.Fatal("expected host to be found in DiscoveredHosts")
+	}
+
+	t.Logf("Host protocols seen: %+v", found.ProtocolsSeen)
+	if !found.ProtocolsSeen["LLMNR"] {
+		t.Errorf("expected LLMNR to be marked as seen, but it was not")
+	}
+}
+

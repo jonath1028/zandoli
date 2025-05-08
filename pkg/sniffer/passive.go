@@ -4,20 +4,17 @@ import (
 	"net"
 	"time"
 
+	pb "github.com/cheggaaa/pb/v3"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
-	pb "github.com/cheggaaa/pb/v3"
 
 	"zandoli/pkg/logger"
 	"zandoli/pkg/oui"
 	"zandoli/pkg/security"
 )
 
-var DiscoveredHosts []Host
-
-// ==================== Passive Sniffing ====================
-
+// StartPassiveSniff démarre une capture passive sur l'interface donnée pendant la durée spécifiée (en secondes).
 func StartPassiveSniff(iface string, duration int) <-chan gopacket.Packet {
 	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
 	if err != nil {
@@ -81,7 +78,13 @@ func StartPassiveSniff(iface string, duration int) <-chan gopacket.Packet {
 					logger.Logger.Info().Msgf("[HOST] New device detected: IP=%s MAC=%s Category=%s", ip.String(), mac.String(), host.Category)
 				}
 
-				// 3. Analyse passive des protocoles
+				// 3. Enregistrement de l'IP source pour les paquets non ARP
+				if netLayer := packet.NetworkLayer(); netLayer != nil {
+					srcIP := netLayer.NetworkFlow().Src().Raw()
+					RegisterIP(srcIP)
+				}
+
+				// 4. Analyse passive des protocoles
 				packetChan <- packet
 			}
 		}
@@ -90,80 +93,5 @@ func StartPassiveSniff(iface string, duration int) <-chan gopacket.Packet {
 	}()
 
 	return packetChan
-}
-
-// ==================== Active ARP Capture ====================
-
-func CaptureARPReplies(iface string, stop chan struct{}) {
-	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
-	if err != nil {
-		logger.Logger.Error().Err(err).Msg("Failed to open interface for ARP reply capture")
-		return
-	}
-	defer handle.Close()
-
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	packets := packetSource.Packets()
-
-	for {
-		select {
-		case <-stop:
-			logger.Logger.Debug().Msg("[ARP] Stop signal received, stopping ARP capture.")
-			return
-
-		case packet, ok := <-packets:
-			if !ok {
-				logger.Logger.Warn().Msg("[ARP] Packet source closed unexpectedly.")
-				return
-			}
-
-			if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
-				arp := arpLayer.(*layers.ARP)
-				ip := net.IP(arp.SourceProtAddress)
-				mac := net.HardwareAddr(arp.SourceHwAddress)
-
-				if ip.String() == "0.0.0.0" || IsAlreadyKnown(ip) {
-					continue
-				}
-
-				host := NewHost(ip, mac, "active")
-				ClassifyHost(&host)
-
-				logger.Logger.Debug().Msgf("[DEBUG] Active NewHost => IP=%s MAC=%s Vendor=%s Category=%s",
-					host.IP, host.MACStr, host.Vendor, host.Category)
-
-				DiscoveredHosts = append(DiscoveredHosts, host)
-
-				go DetectMACMultipleIPs(mac, ip)
-
-				logger.Logger.Info().Msgf("[HOST] Active response: IP=%s MAC=%s Category=%s",
-					ip.String(), mac.String(), host.Category)
-			}
-
-		case <-time.After(15 * time.Second):
-			logger.Logger.Warn().Msg("[ARP] Timeout: No packets received for 3s. Stopping capture.")
-			return
-		}
-	}
-}
-
-// ==================== Shared ====================
-
-func IsAlreadyKnown(ip net.IP) bool {
-	for _, h := range DiscoveredHosts {
-		if h.IP.Equal(ip) {
-			return true
-		}
-	}
-	return false
-}
-
-func IsMACKnown(mac net.HardwareAddr) bool {
-	for _, h := range DiscoveredHosts {
-		if h.MAC.String() == mac.String() {
-			return true
-		}
-	}
-	return false
 }
 

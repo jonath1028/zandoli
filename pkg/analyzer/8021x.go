@@ -27,4 +27,3 @@ func Handle8021X(packet gopacket.Packet) {
 		}
 	}
 }
-

@@ -27,4 +27,3 @@ func detectMACMultipleIPs(mac net.HardwareAddr, ip net.IP) {
 		logger.Logger.Warn().Msgf("[ANOMALY] MAC %s seen with multiple IPs: %v", macStr, macToIPs[macStr])
 	}
 }
-

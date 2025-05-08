@@ -1,0 +1,64 @@
+package analyzer
+
+import (
+	"net"
+	"testing"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/sniffer"
+)
+
+func TestAnalyzeDNS_MinimalDetection(t *testing.T) {
+	sniffer.DiscoveredHosts = nil
+
+	ipv4 := net.IPv4(192, 168, 1, 50)
+	mac := net.HardwareAddr{0x00, 0x0c, 0x29, 0xdd, 0xee, 0xff}
+	host := sniffer.NewHost(ipv4, mac, "passive")
+	sniffer.DiscoveredHosts = append(sniffer.DiscoveredHosts, host)
+
+	dns := &layers.DNS{
+		ID:        0xAAAA,
+		QR:        false,
+		OpCode:    layers.DNSOpCodeQuery,
+		Questions: []layers.DNSQuestion{{Name: []byte("example.local"), Type: layers.DNSTypeA}},
+	}
+
+	udp := &layers.UDP{
+		SrcPort: 5353,
+		DstPort: 53,
+	}
+	ip := &layers.IPv4{
+		SrcIP:    ipv4,
+		DstIP:    net.IPv4(8, 8, 8, 8),
+		Protocol: layers.IPProtocolUDP,
+	}
+	udp.SetNetworkLayerForChecksum(ip)
+
+	eth := &layers.Ethernet{
+		SrcMAC:       mac,
+		DstMAC:       net.HardwareAddr{0xde, 0xad, 0xbe, 0xef, 0xde, 0xad},
+		EthernetType: layers.EthernetTypeIPv4,
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+
+	if err := gopacket.SerializeLayers(buf, opts,
+		eth, ip, udp, dns,
+	); err != nil {
+		t.Fatalf("serialization error: %v", err)
+	}
+
+	packet := gopacket.NewPacket(buf.Bytes(), layers.LayerTypeEthernet, gopacket.Default)
+	AnalyzeDNS(packet)
+
+	h := sniffer.FindHostByIP(ipv4)
+	if h == nil {
+		t.Fatal("host not found")
+	}
+	if !h.ProtocolsSeen["DNS"] {
+		t.Error("expected DNS to be marked as seen, but it was not")
+	}
+}
+

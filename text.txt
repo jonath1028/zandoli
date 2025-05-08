@@ -1,0 +1,1778 @@
+
+===== ./pkg/scanner/scanner.go =====
+package scanner
+
+import (
+	"math/rand"
+	"net"
+	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	pb "github.com/cheggaaa/pb/v3"
+
+	"zandoli/pkg/config"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/oui"
+	"zandoli/pkg/sniffer"
+	"zandoli/pkg/utils"
+)
+
+// ==========================
+// 🔍 Standard ARP Scan
+// ==========================
+
+func ScanARP(ifaceName string) {
+	_, localIP, localMAC := utils.GetInterfaceInfo(ifaceName)
+	subnet := utils.GetLocalSubnet(localIP, ifaceName)
+
+	logger.Logger.Info().Msgf("Starting active ARP scan on %s [%s]", ifaceName, subnet.String())
+
+	stop := make(chan struct{})
+	go sniffer.CaptureARPReplies(ifaceName, stop)
+
+	handle, err := pcap.OpenLive(ifaceName, 65536, false, pcap.BlockForever)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to open interface for active scan")
+		return
+	}
+	defer handle.Close()
+
+	total := 0
+	for ip := range iterateIPs(subnet) {
+		if !ip.Equal(localIP) && !sniffer.IsAlreadyKnown(ip) {
+			total++
+		}
+	}
+
+	bar := pb.New(total)
+	bar.SetMaxWidth(60)
+	bar.SetTemplate(pb.Simple)
+	bar.Set("prefix", "🔍 Active Scan: ")
+	bar.Start()
+
+	for ip := range iterateIPs(subnet) {
+		if ip.Equal(localIP) || sniffer.IsAlreadyKnown(ip) {
+			continue
+		}
+
+		mac := utils.GetMACFromARP(ip, handle, localMAC, localIP)
+		if mac == nil || sniffer.IsMACKnown(mac) {
+			logger.Logger.Debug().Msgf("[SKIP] MAC already seen passively or nil: %s (IP %s)", mac, ip)
+			bar.Increment()
+			continue
+		}
+		if oui.IsFiltered(mac.String()) {
+			logger.Logger.Debug().Msgf("[FILTER] Skipping IP %s (MAC: %s)", ip, mac)
+			bar.Increment()
+			continue
+		}
+
+		sendARP(handle, ip, localMAC, localIP)
+		bar.Increment()
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	bar.Finish()
+	logger.Logger.Info().Msg("[ARP] Waiting briefly for final responses...")
+	time.Sleep(1 * time.Second)
+	close(stop)
+	logger.Logger.Info().Msg("Active ARP scan complete")
+}
+
+// ==========================
+// 🕵 Stealth ARP Scan
+// ==========================
+
+func ScanARPStealth(ifaceName string) {
+	logger.Logger.Info().Msg("[STEALTH] Starting stealth ARP scan...")
+
+	// Chargement de la config
+	cfg := config.StealthARP
+
+	// Interface
+	_, localIP, localMAC := utils.GetInterfaceInfo(ifaceName)
+	subnet := utils.GetLocalSubnet(localIP, ifaceName)
+
+	handle, err := pcap.OpenLive(ifaceName, 65536, false, pcap.BlockForever)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to open interface for stealth scan")
+		return
+	}
+	defer handle.Close()
+
+	stop := make(chan struct{})
+	go sniffer.CaptureARPReplies(ifaceName, stop)
+
+	// Générer les IPs à scanner
+	var allIPs []net.IP
+	for ip := range iterateIPs(subnet) {
+		if !ip.Equal(localIP) && !sniffer.IsAlreadyKnown(ip) {
+			allIPs = append(allIPs, ip)
+		}
+	}
+	rand.Shuffle(len(allIPs), func(i, j int) {
+		allIPs[i], allIPs[j] = allIPs[j], allIPs[i]
+	})
+
+	bar := pb.New(len(allIPs))
+	bar.SetMaxWidth(60)
+	bar.SetTemplate(pb.Simple)
+	bar.Set("prefix", "🕵 Stealth Scan: ")
+	bar.Start()
+
+	var (
+		i          = 0
+		timestamps []time.Time
+	)
+
+	for i < len(allIPs) {
+		now := time.Now()
+
+		// Purge des timestamps hors de la fenêtre de burst
+		filtered := timestamps[:0]
+		for _, t := range timestamps {
+			if now.Sub(t) <= cfg.BurstWindow {
+				filtered = append(filtered, t)
+			}
+		}
+		timestamps = filtered
+
+		// Si on dépasse la limite globale, on attend
+		if len(timestamps) >= cfg.MaxPerBurst {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+
+		// Burst aléatoire
+		burstSize := rand.Intn(cfg.MaxPerBurst-cfg.MinPerBurst+1) + cfg.MinPerBurst
+		sentInBurst := 0
+
+		for sentInBurst < burstSize && i < len(allIPs) {
+			now := time.Now()
+
+			// Limite par seconde
+			count := 0
+			for _, t := range timestamps {
+				if now.Sub(t) <= time.Second {
+					count++
+				}
+			}
+			if count >= cfg.MaxPerSecond {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			// Envoi ARP
+			ip := allIPs[i]
+			sendARP(handle, ip, localMAC, localIP)
+			timestamps = append(timestamps, time.Now())
+			bar.Increment()
+			i++
+			sentInBurst++
+
+			// Jitter exponentiel
+			jitter := time.Duration(rand.ExpFloat64()) * cfg.JitterMean
+			time.Sleep(jitter)
+		}
+
+		if i < len(allIPs) {
+			pause := cfg.BurstPauseMin + time.Duration(rand.Int63n(int64(cfg.BurstPauseMax-cfg.BurstPauseMin)))
+			time.Sleep(pause)
+		}
+	}
+
+	bar.Finish()
+	time.Sleep(500 * time.Millisecond)
+	close(stop)
+	logger.Logger.Info().Msg("[STEALTH] Stealth ARP scan complete.")
+}
+
+// ==========================
+// 🔧 Internal
+// ==========================
+
+func sendARP(handle *pcap.Handle, ip net.IP, mac net.HardwareAddr, localIP net.IP) {
+	eth := layers.Ethernet{
+		SrcMAC:       mac,
+		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		EthernetType: layers.EthernetTypeARP,
+	}
+	arp := layers.ARP{
+		AddrType:          layers.LinkTypeEthernet,
+		Protocol:          layers.EthernetTypeIPv4,
+		HwAddressSize:     6,
+		ProtAddressSize:   4,
+		Operation:         layers.ARPRequest,
+		SourceHwAddress:   mac,
+		SourceProtAddress: localIP.To4(),
+		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
+		DstProtAddress:    ip.To4(),
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{}
+	_ = gopacket.SerializeLayers(buf, opts, &eth, &arp)
+	_ = handle.WritePacketData(buf.Bytes())
+}
+
+func iterateIPs(subnet *net.IPNet) <-chan net.IP {
+	ch := make(chan net.IP)
+	go func() {
+		defer close(ch)
+		for ip := subnet.IP.Mask(subnet.Mask); subnet.Contains(ip); incIP(ip) {
+			tmp := make(net.IP, len(ip))
+			copy(tmp, ip)
+			ch <- tmp
+		}
+	}()
+	return ch
+}
+
+func incIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
+}
+
+
+===== ./pkg/ui/summary.go =====
+package ui
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"zandoli/pkg/sniffer"
+)
+
+func DisplaySummary(hosts []sniffer.Host) {
+	if len(hosts) == 0 {
+		fmt.Println("\n========== SCAN SUMMARY ==========")
+		fmt.Println("No hosts discovered.")
+		fmt.Println("==================================\n")
+		return
+	}
+
+	passive := filterByMethod(hosts, "passive")
+	active := filterByMethod(hosts, "active")
+
+	fmt.Println("\n========== SCAN SUMMARY ==========\n")
+	if len(passive) > 0 {
+		fmt.Printf("🟢 Passive Discovery (Total: %d)\n", len(passive))
+		displayTable(passive)
+	}
+	if len(active) > 0 {
+		fmt.Printf("🔴 Active Discovery (Total: %d)\n", len(active))
+		displayTable(active)
+	}
+
+	fmt.Printf("\n🧮 Total hosts discovered: %d\n", len(hosts))
+	fmt.Println("==================================\n")
+}
+
+func filterByMethod(hosts []sniffer.Host, method string) []sniffer.Host {
+	var result []sniffer.Host
+	for _, h := range hosts {
+		if strings.ToLower(h.DetectionMethod) == method {
+			result = append(result, h)
+		}
+	}
+	return result
+}
+
+func displayTable(hosts []sniffer.Host) {
+	sort.Slice(hosts, func(i, j int) bool {
+		return hosts[i].IP.String() < hosts[j].IP.String()
+	})
+
+	divider := "+----------------+---------------------+---------------------------+-------------------+-------------+------------------------------+"
+	fmt.Println(divider)
+	fmt.Printf("| %-15s | %-19s | %-25s | %-17s | %-11s | %-28s |\n",
+		"IP Address", "MAC Address", "Vendor", "Detection Method", "Category", "Protocols")
+	fmt.Println(divider)
+
+	for _, h := range hosts {
+		vendor := truncate(h.Vendor, 25)
+		if vendor == "" {
+			vendor = "Unknown"
+		}
+		protos := truncate(formatProtocols(h.ProtocolsSeen), 28)
+
+		fmt.Printf("| %-15s | %-19s | %-25s | %-17s | %-11s | %-28s |\n",
+			h.IP.String(),
+			h.MAC.String(),
+			vendor,
+			h.DetectionMethod,
+			h.Category,
+			protos,
+		)
+	}
+
+	fmt.Println(divider)
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-3] + "..."
+}
+
+func formatProtocols(m map[string]bool) string {
+	if len(m) == 0 {
+		return ""
+	}
+	var keys []string
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+
+===== ./pkg/export/export.go =====
+package export
+
+import (
+	"encoding/csv"
+	"encoding/json"
+	"html/template"
+	"os"
+	"path/filepath"
+	"time"
+	"strings"
+
+	"zandoli/pkg/sniffer"
+)
+
+type ScanResult struct {
+	ScanTimestamp        string            `json:"scan_timestamp"`
+	Interface            string            `json:"interface"`
+	DurationPassiveSec   int               `json:"duration_passive_seconds"`
+	HostCount            map[string]int    `json:"host_count"`
+	Passive              []sniffer.Host    `json:"passive"`
+	Active               []sniffer.Host    `json:"active"`
+}
+
+func ExportAll(hosts []sniffer.Host, outputDir string, iface string, duration int) error {
+	timestamp := time.Now().Format("2006-01-02T15-04-05")
+	base := filepath.Join(outputDir, "Passive_"+timestamp)
+
+	// Répartir les hôtes
+	var passive, active []sniffer.Host
+	for _, h := range hosts {
+		switch strings.ToLower(h.DetectionMethod) {
+		case "passive":
+			passive = append(passive, h)
+		case "active":
+			active = append(active, h)
+		}
+	}
+
+	// Créer la structure enrichie
+	result := ScanResult{
+		ScanTimestamp:      time.Now().Format(time.RFC3339),
+		Interface:          iface,
+		DurationPassiveSec: duration,
+		HostCount: map[string]int{
+			"total":   len(hosts),
+			"passive": len(passive),
+			"active":  len(active),
+		},
+		Passive: passive,
+		Active:  active,
+	}
+
+	if err := exportJSON(result, base+".json"); err != nil {
+		return err
+	}
+	if err := exportCSV(hosts, base+".csv"); err != nil {
+		return err
+	}
+	if err := exportHTML(hosts, base+".html"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func exportJSON(result ScanResult, path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(result)
+}
+
+func exportCSV(hosts []sniffer.Host, path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	writer := csv.NewWriter(file)
+	defer writer.Flush()
+
+	writer.Write([]string{"IP", "MAC", "Timestamp", "DetectionMethod"})
+	for _, h := range hosts {
+		writer.Write([]string{
+			h.IP.String(),
+			h.MAC.String(),
+			h.Timestamp.Format(time.RFC3339),
+			h.DetectionMethod,
+		})
+	}
+	return nil
+}
+
+func exportHTML(hosts []sniffer.Host, path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	const tmpl = `
+	<!DOCTYPE html>
+	<html>
+	<head>
+		<meta charset="UTF-8">
+		<title>Zandoli - Passive Scan Report</title>
+		<style>
+			body { font-family: sans-serif; padding: 20px; background: #f9f9f9; }
+			h2 { color: #2c3e50; }
+			table { border-collapse: collapse; width: 100%; }
+			th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+			th { background-color: #f0f0f0; }
+			tr:nth-child(even) { background-color: #fdfdfd; }
+			.mac { font-family: monospace; }
+			.detmethod { font-style: italic; color: #888; }
+		</style>
+	</head>
+	<body>
+	<h2>Discovered Hosts (Passive Mode)</h2>
+	<p>Total: {{len .}}</p>
+	<table>
+		<tr><th>#</th><th>IP Address</th><th>MAC Address</th><th>Timestamp</th><th>Detection</th></tr>
+		{{range $i, $h := .}}
+		<tr>
+			<td>{{add $i 1}}</td>
+			<td>{{$h.IP}}</td>
+			<td class="mac">{{$h.MAC}}</td>
+			<td>{{$h.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+			<td class="detmethod">{{$h.DetectionMethod}}</td>
+		</tr>
+		{{end}}
+	</table>
+	</body>
+	</html>
+	`
+
+	t := template.New("report").Funcs(template.FuncMap{
+		"add": func(a, b int) int { return a + b },
+	})
+	t = template.Must(t.Parse(tmpl))
+	return t.Execute(file, hosts)
+}
+
+===== ./pkg/security/summary.go =====
+package security
+
+import (
+	"net"
+)
+
+// Summary contient les signaux de sécurité réseau détectés passivement.
+// Ce module est conçu pour rester minimal, structuré et extensible.
+// Chaque champ reflète un indicateur pouvant signaler une configuration défensive ou une anomalie réseau.
+type Summary struct {
+	// ✅ Présence de 802.1X / EAPOL (environnement NAC)
+	PassiveSecurity8021X bool `json:"eapol_8021x,omitempty"`
+
+	// ✅ MACs vues avec plusieurs IPs (souvent VM, bridge, spoof, NAT...)
+	MACWithMultipleIPs map[string][]net.IP `json:"mac_with_multiple_ips,omitempty"`
+
+	// Multiple mac une ip
+	IPWithMultipleMACs map[string][]net.HardwareAddr `json:"ip_with_multiple_macs,omitempty"`
+	// 🔜 D'autres signaux à venir (DHCP snooping, proxy, TTL incohérent...)
+
+}
+
+// Exporté globalement pour accès cross-module
+var SecuritySummary = Summary{
+	MACWithMultipleIPs:  make(map[string][]net.IP),
+	IPWithMultipleMACs:  make(map[string][]net.HardwareAddr),
+}
+
+
+===== ./pkg/security/topology.go =====
+package security
+
+import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+)
+
+// TopologyProtocols stocke les détections passives de protocoles de topologie
+type TopologyProtocols struct {
+	LLDP bool `json:"lldp"`
+	CDP  bool `json:"cdp"`
+	STP  bool `json:"stp"`
+}
+
+// Exporté globalement pour être accessible
+var Topology = TopologyProtocols{}
+
+// AnalyzeTopology inspecte les trames Ethernet pour LLDP, CDP, STP
+func AnalyzeTopology(pkt gopacket.Packet) {
+	if eth := pkt.Layer(layers.LayerTypeEthernet); eth != nil {
+		ether := eth.(*layers.Ethernet)
+
+		switch ether.EthernetType {
+		case 0x88cc: // LLDP
+			if !Topology.LLDP {
+				Topology.LLDP = true
+				logger.Logger.Info().Msg("[TOPO] LLDP detected on the wire")
+			}
+		case 0x2000: // CDP
+			if !Topology.CDP {
+				Topology.CDP = true
+				logger.Logger.Info().Msg("[TOPO] CDP detected on the wire")
+			}
+		default:
+			// STP: destination MAC 01:80:c2:00:00:00, LLC header (DSAP=0x42)
+			if ether.DstMAC.String() == "01:80:c2:00:00:00" {
+				if !Topology.STP {
+					Topology.STP = true
+					logger.Logger.Info().Msg("[TOPO] STP detected on the wire")
+				}
+			}
+		}
+	}
+}
+
+
+===== ./pkg/analyzer/8021x.go =====
+package analyzer
+
+import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/security"
+)
+
+var eapolDetected = false
+
+// Handle8021X inspecte les trames Ethernet pour détecter 802.1X (EAPOL)
+func Handle8021X(packet gopacket.Packet) {
+	ethLayer := packet.Layer(layers.LayerTypeEthernet)
+	if ethLayer == nil {
+		return
+	}
+	eth, _ := ethLayer.(*layers.Ethernet)
+
+	if eth.EthernetType == 0x888E {
+		if !eapolDetected {
+			eapolDetected = true
+			security.SecuritySummary.PassiveSecurity8021X = true
+			logger.Logger.Info().Msg("[SECURITY] 802.1X (EAPOL) detected on this network")
+		} else {
+			logger.Logger.Debug().Msg("[802.1X] Additional EAPOL frame detected")
+		}
+	}
+}
+
+
+===== ./pkg/analyzer/eapol.go =====
+package analyzer
+
+import "github.com/google/gopacket"
+
+func AnalyzeEAPOL(packet gopacket.Packet) {
+	// TODO: implement EAPOL analysis
+}
+
+===== ./pkg/analyzer/anomaly.go =====
+package analyzer
+
+import (
+	"net"
+
+	"zandoli/pkg/logger"
+	"zandoli/pkg/security"
+)
+
+// Internal tracking
+var macToIPs = map[string][]net.IP{}
+
+func detectMACMultipleIPs(mac net.HardwareAddr, ip net.IP) {
+	macStr := mac.String()
+	ips := macToIPs[macStr]
+
+	for _, known := range ips {
+		if known.Equal(ip) {
+			return // déjà vu
+		}
+	}
+
+	macToIPs[macStr] = append(ips, ip)
+
+	if len(macToIPs[macStr]) > 1 {
+		security.SecuritySummary.MACWithMultipleIPs[macStr] = macToIPs[macStr]
+		logger.Logger.Warn().Msgf("[ANOMALY] MAC %s seen with multiple IPs: %v", macStr, macToIPs[macStr])
+	}
+}
+
+
+===== ./pkg/analyzer/utils.go =====
+package analyzer
+
+import "github.com/google/gopacket"
+
+func AnalyzeUTILS(packet gopacket.Packet) {
+	// TODO: implement UTILS analysis
+}
+
+===== ./pkg/analyzer/mdns.go =====
+package analyzer
+
+import (
+	"net"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+// AnalyzeMDNS traite les réponses mDNS pour enrichir les hôtes
+func AnalyzeMDNS(packet gopacket.Packet) {
+	udpLayer := packet.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+	udp, _ := udpLayer.(*layers.UDP)
+
+	// Port 5353 utilisé par mDNS
+	if udp.DstPort != 5353 && udp.SrcPort != 5353 {
+		return
+	}
+
+	dnsLayer := packet.Layer(layers.LayerTypeDNS)
+	if dnsLayer == nil {
+		return
+	}
+	dns, _ := dnsLayer.(*layers.DNS)
+
+	if dns.QR { // Réponse mDNS
+		for _, ans := range dns.Answers {
+			if ans.Type == layers.DNSTypeA || ans.Type == layers.DNSTypeAAAA {
+				domain := string(ans.Name)
+				ipLayer := packet.NetworkLayer()
+				if ipLayer == nil {
+					return
+				}
+				srcIP := ipLayer.NetworkFlow().Src().Raw()
+				sniffer.UpdateHostDNS(srcIP, domain)
+				sniffer.RegisterIP(srcIP)
+
+				// Ajout du protocole mDNS
+				host := sniffer.FindHostByIP(net.IP(srcIP))
+				if host != nil {
+					host.ProtocolsSeen["mDNS"] = true
+					sniffer.ClassifyHost(host)
+				}
+
+				logger.Logger.Debug().Msgf("[mDNS] Response for %s from %v", domain, srcIP)
+			}
+		}
+	}
+}
+
+
+===== ./pkg/analyzer/dhcp.go =====
+package analyzer
+
+import (
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+func AnalyzeDHCP(packet gopacket.Packet) {
+	dhcpLayer := packet.Layer(layers.LayerTypeDHCPv4)
+	if dhcpLayer == nil {
+		return
+	}
+
+	dhcp, _ := dhcpLayer.(*layers.DHCPv4)
+	srcIP := dhcp.ClientIP
+	if srcIP.String() == "0.0.0.0" {
+		srcIP = dhcp.YourClientIP
+	}
+
+	host := sniffer.FindHostByIP(srcIP)
+	if host == nil {
+		return
+	}
+
+	host.ProtocolsSeen["dhcp"] = true
+
+	for _, opt := range dhcp.Options {
+		switch opt.Type {
+		case layers.DHCPOptHostname:
+			host.Hostname = string(opt.Data)
+		case layers.DHCPOptDomainName:
+			host.DomainName = string(opt.Data)
+		case 54:
+			host.Metadata["dhcp_server"] = string(opt.Data)
+		case 82:
+			host.Metadata["relay_agent"] = string(opt.Data)
+		}
+	}
+
+	logger.Logger.Debug().Msgf("[DHCP] Updated host %s with DHCP info", host.IP)
+}
+
+
+===== ./pkg/analyzer/proxy.go =====
+package analyzer
+
+import "github.com/google/gopacket"
+
+func AnalyzePROXY(packet gopacket.Packet) {
+	// TODO: implement PROXY analysis
+}
+
+===== ./pkg/analyzer/fingerprint.go =====
+package analyzer
+
+import "github.com/google/gopacket"
+
+func AnalyzeFINGERPRINT(packet gopacket.Packet) {
+	// TODO: implement FINGERPRINT analysis
+}
+
+===== ./pkg/analyzer/smb.go =====
+package analyzer
+
+import (
+	"bytes"
+	"encoding/binary"
+	"net"
+	"strings"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+// AnalyzeSMB tente d'extraire des noms via le protocole SMB (TCP 445)
+func AnalyzeSMB(packet gopacket.Packet) {
+	tcpLayer := packet.Layer(layers.LayerTypeTCP)
+	if tcpLayer == nil {
+		return
+	}
+	tcp, _ := tcpLayer.(*layers.TCP)
+
+	// Port SMB direct
+	if tcp.DstPort != 445 && tcp.SrcPort != 445 {
+		return
+	}
+
+	// Analyse du payload brut
+	payload := tcp.Payload
+	if len(payload) < 100 {
+		return
+	}
+
+	// Recherche d'une chaîne Unicode potentielle
+	if name := extractSMBHostname(payload); name != "" {
+		ipLayer := packet.NetworkLayer()
+		if ipLayer == nil {
+			return
+		}
+		srcIP := ipLayer.NetworkFlow().Src().Raw()
+		sniffer.UpdateHostDNS(srcIP, name)
+		sniffer.RegisterIP(srcIP)
+
+		// Ajout du protocole SMB
+		host := sniffer.FindHostByIP(net.IP(srcIP))
+		if host != nil {
+			host.ProtocolsSeen["SMB"] = true
+			sniffer.ClassifyHost(host)
+		}
+
+		logger.Logger.Debug().Msgf("[SMB] Hostname from SMB: %s (%v)", name, srcIP)
+	}
+}
+
+// extractSMBHostname tente d’extraire une chaîne Unicode plausible
+func extractSMBHostname(data []byte) string {
+	// Recherche naïve d’un pattern Unicode (UCS2)
+	for i := 0; i < len(data)-32; i++ {
+		sub := data[i : i+32]
+		utf16 := make([]uint16, 16)
+		for j := 0; j < 16; j++ {
+			utf16[j] = binary.LittleEndian.Uint16(sub[j*2 : j*2+2])
+		}
+		str := decodeUTF16(utf16)
+		if isValidSMBName(str) {
+			return str
+		}
+	}
+	return ""
+}
+
+// decodeUTF16 décode une suite UCS2 vers string
+func decodeUTF16(utf16 []uint16) string {
+	var buf bytes.Buffer
+	for _, r := range utf16 {
+		if r == 0 {
+			break
+		}
+		buf.WriteRune(rune(r))
+	}
+	return buf.String()
+}
+
+// isValidSMBName applique des heuristiques simples (longueur, printable, etc.)
+func isValidSMBName(s string) bool {
+	if len(s) < 3 || len(s) > 15 {
+		return false
+	}
+	return strings.IndexFunc(s, func(r rune) bool {
+		return r < 32 || r > 126
+	}) == -1
+}
+
+
+===== ./pkg/analyzer/netbios.go =====
+package analyzer
+
+import (
+	"net"
+	"strings"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+// AnalyzeNetBIOS extrait les noms NetBIOS des requêtes/réponses UDP 137
+func AnalyzeNetBIOS(packet gopacket.Packet) {
+	udpLayer := packet.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+	udp, _ := udpLayer.(*layers.UDP)
+	if udp.SrcPort != 137 && udp.DstPort != 137 {
+		return
+	}
+
+	payload := udp.Payload
+	if len(payload) < 57 {
+		return
+	}
+
+	// Nom NetBIOS : commence à l'octet 13 sur 32 octets
+	nameBytes := payload[13 : 13+32]
+	name := decodeNetBIOSName(nameBytes)
+
+	// Adresse IP source
+	ipLayer := packet.NetworkLayer()
+	if ipLayer == nil {
+		return
+	}
+	srcIP := ipLayer.NetworkFlow().Src().Raw()
+
+	sniffer.UpdateHostDNS(srcIP, name)
+	sniffer.RegisterIP(srcIP)
+
+	// Ajout du protocole NetBIOS et classification
+	host := sniffer.FindHostByIP(net.IP(srcIP))
+	if host != nil {
+		host.ProtocolsSeen["NetBIOS"] = true
+		sniffer.ClassifyHost(host)
+	}
+
+	logger.Logger.Debug().Msgf("[NetBIOS] Passive hostname: %s from %v", name, srcIP)
+}
+
+// decodeNetBIOSName convertit un nom encodé NetBIOS vers une chaîne lisible
+func decodeNetBIOSName(data []byte) string {
+	if len(data) < 32 {
+		return ""
+	}
+	decoded := make([]byte, 16)
+	for i := 0; i < 16; i++ {
+		c1 := data[2*i] - 'A'
+		c2 := data[2*i+1] - 'A'
+		decoded[i] = (c1 << 4) | c2
+	}
+	trimmed := strings.TrimRight(string(decoded), "\x00 ")
+	return trimmed
+}
+
+
+===== ./pkg/analyzer/classifier.go =====
+package analyzer
+
+import "github.com/google/gopacket"
+
+func AnalyzeCLASSIFIER(packet gopacket.Packet) {
+	// TODO: implement CLASSIFIER analysis
+}
+
+===== ./pkg/analyzer/llmnr.go =====
+package analyzer
+
+import (
+	"net"
+	"strings"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+// AnalyzeLLMNR analyse les requêtes LLMNR (UDP 5355)
+func AnalyzeLLMNR(packet gopacket.Packet) {
+	udpLayer := packet.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+	udp, _ := udpLayer.(*layers.UDP)
+
+	// Vérifie le port 5355 (LLMNR)
+	if udp.DstPort != 5355 && udp.SrcPort != 5355 {
+		return
+	}
+
+	dnsLayer := packet.Layer(layers.LayerTypeDNS)
+	if dnsLayer == nil {
+		return
+	}
+	dns, _ := dnsLayer.(*layers.DNS)
+
+	// On traite uniquement les requêtes
+	if dns.QR {
+		return
+	}
+
+	ipLayer := packet.NetworkLayer()
+	if ipLayer == nil {
+		return
+	}
+	srcIP := ipLayer.NetworkFlow().Src().Raw()
+
+	for _, q := range dns.Questions {
+		domain := strings.ToLower(string(q.Name))
+		sniffer.UpdateHostDNS(srcIP, domain)
+		sniffer.RegisterIP(srcIP)
+
+		// Marque le protocole comme observé
+		host := sniffer.FindHostByIP(net.IP(srcIP))
+		if host != nil {
+			host.ProtocolsSeen["LLMNR"] = true
+			sniffer.ClassifyHost(host)
+		}
+
+		logger.Logger.Debug().Msgf("[LLMNR] Request for %s from %v", domain, srcIP)
+	}
+}
+
+
+===== ./pkg/analyzer/router.go =====
+package analyzer
+
+import (
+	"github.com/google/gopacket"
+
+	"zandoli/pkg/security"
+)
+
+// Liste des fonctions analyzers à appeler
+var activeAnalyzers = []func(gopacket.Packet){
+	security.AnalyzeTopology,
+	AnalyzeDNS,
+	AnalyzeMDNS,
+	AnalyzeDHCP,
+	AnalyzeSMB,
+	AnalyzeEAPOL,
+	Handle8021X,
+}
+
+
+// HandlePacket appelle tous les analyzers sur le paquet
+func HandlePacket(packet gopacket.Packet) {
+	for _, analyzer := range activeAnalyzers {
+		analyzer(packet)
+	}
+}
+
+
+===== ./pkg/analyzer/dns.go =====
+package analyzer
+
+import (
+	"net"
+	"strings"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/sniffer"
+)
+
+// AnalyzeDNS enrichit les hôtes en observant les requêtes DNS classiques
+func AnalyzeDNS(packet gopacket.Packet) {
+	udpLayer := packet.Layer(layers.LayerTypeUDP)
+	if udpLayer == nil {
+		return
+	}
+	udp, _ := udpLayer.(*layers.UDP)
+
+	// Ports typiques DNS
+	if udp.DstPort != 53 && udp.SrcPort != 53 {
+		return
+	}
+
+	dnsLayer := packet.Layer(layers.LayerTypeDNS)
+	if dnsLayer == nil {
+		return
+	}
+	dns, _ := dnsLayer.(*layers.DNS)
+
+	// On ne traite que les requêtes
+	if dns.QR {
+		return
+	}
+
+	ipLayer := packet.NetworkLayer()
+	if ipLayer == nil {
+		return
+	}
+	srcIP := ipLayer.NetworkFlow().Src().Raw()
+
+	for _, q := range dns.Questions {
+		name := strings.ToLower(string(q.Name))
+		sniffer.UpdateHostDNS(srcIP, name)
+		sniffer.RegisterIP(srcIP)
+
+		host := sniffer.FindHostByIP(net.IP(srcIP))
+		if host != nil {
+			host.ProtocolsSeen["DNS"] = true
+			sniffer.ClassifyHost(host)
+		}
+
+		logger.Logger.Debug().Msgf("[DNS] Request for %s from %v", name, srcIP)
+	}
+}
+
+
+===== ./pkg/utils/utils.go =====
+package utils
+
+import (
+	"net"
+	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+)
+
+// GetInterfaceInfo retourne l'interface, l'IP locale et la MAC associée
+func GetInterfaceInfo(ifaceName string) (iface *net.Interface, ip net.IP, mac net.HardwareAddr) {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		panic(err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil || len(addrs) == 0 {
+		panic("No IP found on interface " + ifaceName)
+	}
+	var ipAddr net.IP
+	for _, addr := range addrs {
+		if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
+			ipAddr = ipNet.IP
+			break
+		}
+	}
+	return iface, ipAddr, iface.HardwareAddr
+}
+
+// GetLocalSubnet calcule le sous-réseau basé sur l'IP locale et le masque
+func GetLocalSubnet(ip net.IP, ifaceName string) *net.IPNet {
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		panic(err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		panic(err)
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok && ipnet.IP.To4() != nil && ip.Equal(ipnet.IP) {
+			networkIP := ip.Mask(ipnet.Mask)
+			return &net.IPNet{
+				IP:   networkIP,
+				Mask: ipnet.Mask,
+			}
+		}
+	}
+	panic("Subnet not found for IP " + ip.String())
+}
+
+// IPsInSubnet retourne un channel contenant les IPs d’un sous-réseau (sauf exclude)
+func IPsInSubnet(subnet *net.IPNet, exclude net.IP) <-chan net.IP {
+	ch := make(chan net.IP)
+	go func() {
+		defer close(ch)
+		for ip := subnet.IP.Mask(subnet.Mask); subnet.Contains(ip); incIP(ip) {
+			tmp := make(net.IP, len(ip))
+			copy(tmp, ip)
+			if !tmp.Equal(exclude) {
+				ch <- tmp
+			}
+		}
+	}()
+	return ch
+}
+
+// incIP incrémente une IP de 1 (utile pour itérer sur un range IP)
+func incIP(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
+}
+
+// GetMACFromARP envoie une requête ARP et retourne la MAC de la cible (ou nil si pas de réponse)
+func GetMACFromARP(targetIP net.IP, handle *pcap.Handle, srcMAC net.HardwareAddr, srcIP net.IP) net.HardwareAddr {
+	eth := layers.Ethernet{
+		SrcMAC:       srcMAC,
+		DstMAC:       net.HardwareAddr{0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+		EthernetType: layers.EthernetTypeARP,
+	}
+	arp := layers.ARP{
+		AddrType:          layers.LinkTypeEthernet,
+		Protocol:          layers.EthernetTypeIPv4,
+		HwAddressSize:     6,
+		ProtAddressSize:   4,
+		Operation:         layers.ARPRequest,
+		SourceHwAddress:   srcMAC,
+		SourceProtAddress: srcIP.To4(),
+		DstHwAddress:      []byte{0, 0, 0, 0, 0, 0},
+		DstProtAddress:    targetIP.To4(),
+	}
+
+	buf := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{}
+	gopacket.SerializeLayers(buf, opts, &eth, &arp)
+	_ = handle.WritePacketData(buf.Bytes())
+
+	// Capture les réponses ARP pendant 300 ms
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	timeout := time.After(300 * time.Millisecond)
+
+	for {
+		select {
+		case packet := <-packetSource.Packets():
+			if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
+				arpResp := arpLayer.(*layers.ARP)
+				if net.IP(arpResp.SourceProtAddress).Equal(targetIP) {
+					return net.HardwareAddr(arpResp.SourceHwAddress)
+				}
+			}
+		case <-timeout:
+			return nil
+		}
+	}
+}
+
+
+===== ./pkg/sniffer/host.go =====
+package sniffer
+
+import (
+	"net"
+	"time"
+
+	"zandoli/pkg/logger"
+	"zandoli/pkg/oui"
+)
+
+type Host struct {
+	IP              net.IP           `json:"ip"`
+	MAC             net.HardwareAddr `json:"-"`
+	MACStr          string           `json:"mac"`
+	Timestamp       time.Time        `json:"timestamp"`
+	DetectionMethod string           `json:"detection_method"`
+	Vendor          string           `json:"vendor"`
+	Category        string           `json:"category"`
+
+	// Champs enrichis par l’analyse passive
+	Hostname      string            `json:"hostname,omitempty"`
+	DomainName    string            `json:"domain_name,omitempty"`
+	ProtocolsSeen map[string]bool   `json:"protocols_seen,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+}
+
+// NewHost crée un nouvel hôte découvert sur le réseau
+func NewHost(ip net.IP, mac net.HardwareAddr, method string) Host {
+	vendor := oui.GetVendor(mac.String())
+	category := oui.GuessCategory(vendor)
+
+	h := Host{
+		IP:              ip,
+		MAC:             mac,
+		MACStr:          mac.String(),
+		Timestamp:       time.Now(),
+		DetectionMethod: method,
+		Vendor:          vendor,
+		Category:        category,
+		Hostname:        "",
+		DomainName:      "",
+		ProtocolsSeen:   make(map[string]bool),
+		Metadata:        make(map[string]string),
+	}
+
+	logger.Logger.Debug().Msgf("[DEBUG] NewHost() => IP=%s MAC=%s Vendor=%s InitialCategory=%s",
+		h.IP, h.MACStr, h.Vendor, h.Category)
+
+	return h
+}
+
+// FindHostByIP retourne un pointeur vers l’hôte déjà connu (ou nil sinon)
+func FindHostByIP(ip net.IP) *Host {
+	for i := range DiscoveredHosts {
+		if DiscoveredHosts[i].IP.Equal(ip) {
+			return &DiscoveredHosts[i]
+		}
+	}
+	return nil
+}
+
+// ClassifyHost attribue une catégorie à l'hôte selon les protocoles observés
+func ClassifyHost(h *Host) {
+	switch {
+	case h.ProtocolsSeen["SMB"] || h.ProtocolsSeen["NetBIOS"]:
+		h.Category = "server"
+	case h.ProtocolsSeen["DHCP"] || h.ProtocolsSeen["mDNS"] || h.ProtocolsSeen["LLMNR"]:
+		h.Category = "workstation"
+	case h.ProtocolsSeen["CDP"] || h.ProtocolsSeen["LLDP"] || h.ProtocolsSeen["STP"]:
+		h.Category = "network"
+	default:
+		h.Category = oui.GuessCategory(h.Vendor) // fallback
+	}
+
+	logger.Logger.Debug().Msgf("[DEBUG] ClassifyHost() => IP=%s Category=%s (based on protocols)", h.IP, h.Category)
+}
+
+
+===== ./pkg/sniffer/sniffer.go =====
+package sniffer
+
+import (
+	"net"
+	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	pb "github.com/cheggaaa/pb/v3"
+
+	"zandoli/pkg/logger"
+	"zandoli/pkg/oui"
+	"zandoli/pkg/security"
+)
+
+var DiscoveredHosts []Host
+
+// ==================== Passive Sniffing ====================
+
+func StartPassiveSniff(iface string, duration int) <-chan gopacket.Packet {
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
+	if err != nil {
+		logger.Logger.Fatal().Err(err).Msg("Failed to open interface for sniffing")
+	}
+
+	logger.Logger.Info().Msgf("Starting passive ARP sniffing on %s (%d seconds)", iface, duration)
+
+	packetChan := make(chan gopacket.Packet)
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	rawPackets := packetSource.Packets()
+
+	// Progress bar over time
+	bar := pb.New(duration).SetTemplate(pb.Simple)
+	bar.SetMaxWidth(60)
+	bar.Set("prefix", "⏳ Passive Capture: ")
+	bar.Start()
+
+	go func() {
+		defer close(packetChan)
+		defer handle.Close()
+
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		timeout := time.After(time.Duration(duration) * time.Second)
+
+	loop:
+		for {
+			select {
+			case <-timeout:
+				logger.Logger.Info().Msg("Passive sniffing complete")
+				break loop
+
+			case <-ticker.C:
+				bar.Increment()
+
+			case packet, ok := <-rawPackets:
+				if !ok {
+					break loop
+				}
+
+				// 1. Analyse topologie réseau (LLDP, CDP, STP)
+				go security.AnalyzeTopology(packet)
+
+				// 2. Découverte ARP
+				if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
+					arp := arpLayer.(*layers.ARP)
+					ip := net.IP(arp.SourceProtAddress)
+					mac := net.HardwareAddr(arp.SourceHwAddress)
+
+					if ip.String() == "0.0.0.0" || oui.IsFiltered(mac.String()) || IsAlreadyKnown(ip) {
+						continue
+					}
+
+					host := NewHost(ip, mac, "passive")
+					ClassifyHost(&host)
+					DiscoveredHosts = append(DiscoveredHosts, host)
+
+					go DetectMACMultipleIPs(mac, ip)
+					logger.Logger.Info().Msgf("[HOST] New device detected: IP=%s MAC=%s Category=%s", ip.String(), mac.String(), host.Category)
+				}
+
+				// 3. Analyse passive des protocoles
+				packetChan <- packet
+			}
+		}
+
+		bar.Finish()
+	}()
+
+	return packetChan
+}
+
+// ==================== Active ARP Capture ====================
+
+func CaptureARPReplies(iface string, stop chan struct{}) {
+	handle, err := pcap.OpenLive(iface, 65536, true, pcap.BlockForever)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to open interface for ARP reply capture")
+		return
+	}
+	defer handle.Close()
+
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	packets := packetSource.Packets()
+
+	for {
+		select {
+		case <-stop:
+			logger.Logger.Debug().Msg("[ARP] Stop signal received, stopping ARP capture.")
+			return
+
+		case packet, ok := <-packets:
+			if !ok {
+				logger.Logger.Warn().Msg("[ARP] Packet source closed unexpectedly.")
+				return
+			}
+
+			if arpLayer := packet.Layer(layers.LayerTypeARP); arpLayer != nil {
+				arp := arpLayer.(*layers.ARP)
+				ip := net.IP(arp.SourceProtAddress)
+				mac := net.HardwareAddr(arp.SourceHwAddress)
+
+				if ip.String() == "0.0.0.0" || IsAlreadyKnown(ip) {
+					continue
+				}
+
+				host := NewHost(ip, mac, "active")
+				ClassifyHost(&host)
+
+				logger.Logger.Debug().Msgf("[DEBUG] Active NewHost => IP=%s MAC=%s Vendor=%s Category=%s",
+					host.IP, host.MACStr, host.Vendor, host.Category)
+
+				DiscoveredHosts = append(DiscoveredHosts, host)
+
+				go DetectMACMultipleIPs(mac, ip)
+
+				logger.Logger.Info().Msgf("[HOST] Active response: IP=%s MAC=%s Category=%s",
+					ip.String(), mac.String(), host.Category)
+			}
+
+		case <-time.After(15 * time.Second):
+			logger.Logger.Warn().Msg("[ARP] Timeout: No packets received for 3s. Stopping capture.")
+			return
+		}
+	}
+}
+
+// ==================== Shared ====================
+
+func IsAlreadyKnown(ip net.IP) bool {
+	for _, h := range DiscoveredHosts {
+		if h.IP.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func IsMACKnown(mac net.HardwareAddr) bool {
+	for _, h := range DiscoveredHosts {
+		if h.MAC.String() == mac.String() {
+			return true
+		}
+	}
+	return false
+}
+
+
+===== ./pkg/sniffer/host_helpers.go =====
+package sniffer
+
+import (
+	"bytes"
+	"fmt"
+	"net"
+	"strings"
+)
+
+var DiscoveredNetworks = map[string]bool{}
+
+// UpdateHostDNS enrichit un hôte avec des infos DNS/mDNS/LLMNR/NetBIOS
+func UpdateHostDNS(ipRaw []byte, domain string) {
+	for i := range DiscoveredHosts {
+		if bytes.Equal(DiscoveredHosts[i].IP, ipRaw) {
+			if DiscoveredHosts[i].DomainName == "" {
+				DiscoveredHosts[i].DomainName = domain
+			}
+			if DiscoveredHosts[i].Hostname == "" {
+				parts := strings.Split(domain, ".")
+				if len(parts) > 0 {
+					DiscoveredHosts[i].Hostname = parts[0]
+				}
+			}
+			DiscoveredHosts[i].ProtocolsSeen["dns"] = true
+			RegisterIP(ipRaw)
+			break
+		}
+	}
+}
+
+// RegisterIP ajoute une IP au suivi des sous-réseaux détectés (privés uniquement)
+func RegisterIP(ipRaw []byte) {
+	ip := net.IP(ipRaw)
+	if ip.To4() == nil || !isPrivateIP(ip) {
+		return
+	}
+	network := ip.Mask(net.CIDRMask(24, 32))
+	key := fmt.Sprintf("%s/24", network.String())
+
+	if _, exists := DiscoveredNetworks[key]; !exists {
+		DiscoveredNetworks[key] = true
+	}
+}
+
+// isPrivateIP vérifie si une IP est dans les plages RFC1918 (privées)
+func isPrivateIP(ip net.IP) bool {
+	privateCIDRs := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+	}
+	for _, cidr := range privateCIDRs {
+		_, block, _ := net.ParseCIDR(cidr)
+		if block.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+
+===== ./pkg/sniffer/mac_anomaly.go =====
+package sniffer
+
+import (
+	"net"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/security"
+)
+
+var macToIPs = map[string][]net.IP{}
+var ipToMACs = map[string][]net.HardwareAddr{}
+
+func DetectMACMultipleIPs(mac net.HardwareAddr, ip net.IP) {
+	macStr := mac.String()
+	ips := macToIPs[macStr]
+
+	for _, known := range ips {
+		if known.Equal(ip) {
+			return
+		}
+	}
+
+	macToIPs[macStr] = append(ips, ip)
+
+	if len(macToIPs[macStr]) > 1 {
+		security.SecuritySummary.MACWithMultipleIPs[macStr] = macToIPs[macStr]
+		logger.Logger.Warn().Msgf("[ANOMALY] MAC %s seen with multiple IPs: %v", macStr, macToIPs[macStr])
+	}
+}
+
+func DetectIPWithMultipleMACs(ip net.IP, mac net.HardwareAddr) {
+	ipStr := ip.String()
+	macs := ipToMACs[ipStr]
+
+	for _, known := range macs {
+		if known.String() == mac.String() {
+			return
+		}
+	}
+
+	ipToMACs[ipStr] = append(macs, mac)
+
+	if len(ipToMACs[ipStr]) > 1 {
+		security.SecuritySummary.IPWithMultipleMACs[ipStr] = ipToMACs[ipStr]
+		logger.Logger.Warn().Msgf("[ANOMALY] IP %s seen with multiple MACs: %v", ipStr, ipToMACs[ipStr])
+	}
+}
+
+===== ./cmd/main.go =====
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"time"
+
+	"zandoli/pkg/analyzer"
+	"zandoli/pkg/config"
+	"zandoli/pkg/export"
+	"zandoli/pkg/logger"
+	"zandoli/pkg/oui"
+	"zandoli/pkg/scanner"
+	"zandoli/pkg/sniffer"
+	"zandoli/pkg/ui"
+)
+
+func main() {
+	// === CLI flags ===
+	configPath := flag.String("config", "assets/config.yaml", "Path to config file")
+	flag.Parse()
+
+	// === Load config ===
+	cfg, err := config.LoadConfig(*configPath)
+	if err != nil {
+		fmt.Printf("Failed to load config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// === Init logging ===
+	logger.InitLoggerFromConfig(cfg.LogLevel, cfg.LogFile)
+	logger.Logger.Info().Msg("Zandoli starting...")
+	logger.Logger.Info().Msgf("Interface: %s", cfg.Iface)
+	logger.Logger.Info().Msgf("Passive sniffing duration: %d seconds", cfg.PassiveDuration)
+	logger.Logger.Info().Msgf("Output directory: %s", cfg.OutputDir)
+	logger.Logger.Info().Msgf("Log file: %s", cfg.LogFile)
+	logger.Logger.Debug().Msgf("Scan mode: %s | Active type: %s", cfg.Scan.Mode, cfg.Scan.ActiveType)
+
+	// === Load vendor + filtering files ===
+	if err := oui.LoadVendors("assets/mac_vendors.txt"); err != nil {
+		logger.Logger.Warn().Err(err).Msg("Failed to load vendor list")
+	}
+	if err := oui.LoadOUILists("assets/oui_defensive.txt", "assets/blacklist_oui.txt"); err != nil {
+		logger.Logger.Warn().Err(err).Msg("Failed to load OUI filters")
+	}
+
+	// === Dispatch by scan mode ===
+	switch cfg.Scan.Mode {
+	case "passive":
+		logger.Logger.Info().Msg("Running in passive-only mode")
+		runPassive(cfg)
+
+	case "active":
+		logger.Logger.Info().Msg("Running in active-only mode")
+		runActive(cfg)
+
+	case "combined":
+		logger.Logger.Info().Msg("Running in combined mode (passive + active)")
+		runPassive(cfg)
+		if len(sniffer.DiscoveredHosts) == 0 {
+			logger.Logger.Warn().Msg("No hosts discovered during passive sniffing.")
+		}
+		runActive(cfg)
+
+	default:
+		logger.Logger.Fatal().Msgf("Invalid scan mode: %s", cfg.Scan.Mode)
+	}
+
+	// === Export results ===
+	logger.Logger.Info().Msgf("Exporting %d discovered hosts...", len(sniffer.DiscoveredHosts))
+	err = export.ExportAll(sniffer.DiscoveredHosts, cfg.OutputDir, cfg.Iface, cfg.PassiveDuration)
+	if err != nil {
+		logger.Logger.Error().Err(err).Msg("Failed to export results")
+		os.Exit(1)
+	}
+	logger.Logger.Info().Msg("Export completed successfully.")
+
+	// === Display summary ===
+	ui.DisplaySummary(sniffer.DiscoveredHosts)
+	logger.Logger.Info().Msg("Zandoli finished.")
+}
+
+// runPassive encapsulates the passive scan logic
+func runPassive(cfg *config.Config) {
+	start := time.Now()
+	packets := sniffer.StartPassiveSniff(cfg.Iface, cfg.PassiveDuration)
+	done := make(chan struct{})
+
+	go func() {
+		for packet := range packets {
+			analyzer.HandlePacket(packet)
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		logger.Logger.Debug().Msg("Packet processing loop ended.")
+	case <-time.After(time.Duration(cfg.PassiveDuration+5) * time.Second):
+		logger.Logger.Warn().Msg("Packet processing loop timeout reached.")
+	}
+
+	logger.Logger.Debug().Msgf("Passive phase done. Hosts: %d | Duration: %s",
+		len(sniffer.DiscoveredHosts), time.Since(start))
+}
+
+// runActive encapsulates the active scan logic
+func runActive(cfg *config.Config) {
+	switch cfg.Scan.ActiveType {
+	case "stealth":
+		logger.Logger.Debug().Msg("Starting stealth ARP scan")
+		scanner.ScanARPStealth(cfg.Iface)
+	case "standard", "":
+		logger.Logger.Debug().Msg("Starting standard ARP scan")
+		scanner.ScanARP(cfg.Iface)
+	default:
+		logger.Logger.Fatal().Msgf("Invalid active_type value: %s", cfg.Scan.ActiveType)
+	}
+}
+
+
+
+===== FILE TREE =====
+
+.
+├── assets
+│   ├── blacklist_oui.txt
+│   ├── config.yaml
+│   ├── mac_vendors.txt
+│   └── oui_defensive.txt
+├── benchmark_results.csv
+├── captures
+├── cmd
+│   ├── main.go
+│   └── main.go.bak2
+├── go.mod
+├── go.sum
+├── install.sh
+├── log
+│   └── zandoli.log
+├── Makefile
+├── output
+├── pkg
+│   ├── analyzer
+│   │   ├── 8021x.go
+│   │   ├── anomaly.go
+│   │   ├── classifier.go
+│   │   ├── dhcp.go
+│   │   ├── dns.go
+│   │   ├── eapol.go
+│   │   ├── fingerprint.go
+│   │   ├── llmnr.go
+│   │   ├── mdns.go
+│   │   ├── netbios.go
+│   │   ├── proxy.go
+│   │   ├── router.go
+│   │   ├── smb.go
+│   │   └── utils.go
+│   ├── config
+│   │   └── config.go
+│   ├── export
+│   │   ├── export.go
+│   │   └── export_test.go
+│   ├── logger
+│   │   └── logger.go
+│   ├── oui
+│   │   ├── classifier.go
+│   │   ├── vendor.go
+│   │   └── vendor.go.bak
+│   ├── scanner
+│   │   ├── scanner.go
+│   │   ├── scanner.go.bak
+│   │   ├── scanner.go.bak2
+│   │   ├── scanner_stealth_test.go
+│   │   └── scanner_test.go
+│   ├── security
+│   │   ├── summary.go
+│   │   └── topology.go
+│   ├── sniffer
+│   │   ├── classification_test.go
+│   │   ├── host.go
+│   │   ├── host_helpers.go
+│   │   ├── mac_anomaly.go
+│   │   ├── sniffer.go
+│   │   └── sniffer_test.go
+│   ├── ui
+│   │   └── summary.go
+│   └── utils
+│       ├── utils.go
+│       └── utils_test.go
+├── README.md
+├── script
+│   ├── benchmark.py
+│   ├── data.raw
+│   └── repartitionreq.py
+├── text.txt
+├── TODO.md
+└── zandoli
+
+18 directories, 56 files

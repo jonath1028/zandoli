@@ -54,4 +54,3 @@ func AnalyzeDNS(packet gopacket.Packet) {
 		logger.Logger.Debug().Msgf("[DNS] Request for %s from %v", name, srcIP)
 	}
 }
-

@@ -2,38 +2,38 @@ package ui
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	"zandoli/pkg/sniffer"
 )
 
+// DisplaySummary affiche un récapitulatif des hôtes découverts
 func DisplaySummary(hosts []sniffer.Host) {
 	if len(hosts) == 0 {
-		fmt.Println("\n========== SCAN SUMMARY ==========")
+		fmt.Println("========== SCAN SUMMARY ==========")
 		fmt.Println("No hosts discovered.")
-		fmt.Println("==================================\n")
+		fmt.Println("==================================")
 		return
 	}
 
-	passive := filterByMethod(hosts, "passive")
-	active := filterByMethod(hosts, "active")
+	passive := filterHostsByMethod(hosts, "passive")
+	active := filterHostsByMethod(hosts, "active")
 
-	fmt.Println("\n========== SCAN SUMMARY ==========\n")
+	fmt.Println("========== SCAN SUMMARY ==========")
 	if len(passive) > 0 {
 		fmt.Printf("🟢 Passive Discovery (Total: %d)\n", len(passive))
-		displayTable(passive)
+		displayHostsTable(passive)
 	}
 	if len(active) > 0 {
 		fmt.Printf("🔴 Active Discovery (Total: %d)\n", len(active))
-		displayTable(active)
+		displayHostsTable(active)
 	}
 
 	fmt.Printf("\n🧮 Total hosts discovered: %d\n", len(hosts))
-	fmt.Println("==================================\n")
+	fmt.Println("==================================")
 }
 
-func filterByMethod(hosts []sniffer.Host, method string) []sniffer.Host {
+func filterHostsByMethod(hosts []sniffer.Host, method string) []sniffer.Host {
 	var result []sniffer.Host
 	for _, h := range hosts {
 		if strings.ToLower(h.DetectionMethod) == method {
@@ -42,54 +42,3 @@ func filterByMethod(hosts []sniffer.Host, method string) []sniffer.Host {
 	}
 	return result
 }
-
-func displayTable(hosts []sniffer.Host) {
-	sort.Slice(hosts, func(i, j int) bool {
-		return hosts[i].IP.String() < hosts[j].IP.String()
-	})
-
-	divider := "+----------------+---------------------+---------------------------+-------------------+-------------+------------------------------+"
-	fmt.Println(divider)
-	fmt.Printf("| %-15s | %-19s | %-25s | %-17s | %-11s | %-28s |\n",
-		"IP Address", "MAC Address", "Vendor", "Detection Method", "Category", "Protocols")
-	fmt.Println(divider)
-
-	for _, h := range hosts {
-		vendor := truncate(h.Vendor, 25)
-		if vendor == "" {
-			vendor = "Unknown"
-		}
-		protos := truncate(formatProtocols(h.ProtocolsSeen), 28)
-
-		fmt.Printf("| %-15s | %-19s | %-25s | %-17s | %-11s | %-28s |\n",
-			h.IP.String(),
-			h.MAC.String(),
-			vendor,
-			h.DetectionMethod,
-			h.Category,
-			protos,
-		)
-	}
-
-	fmt.Println(divider)
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max-3] + "..."
-}
-
-func formatProtocols(m map[string]bool) string {
-	if len(m) == 0 {
-		return ""
-	}
-	var keys []string
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ",")
-}
-

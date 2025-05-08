@@ -15,21 +15,22 @@ type ScanConfig struct {
 
 // Configuration fine pour le mode stealth
 type StealthConfig struct {
-	MaxPerSecond int
-	MaxPerBurst  int
-	MinPerBurst  int
-	BurstWindow  time.Duration
-	JitterMean   time.Duration
-	BurstPauseMin time.Duration
-	BurstPauseMax time.Duration
+	MaxPerSecond  int           `yaml:"max_requests_per_second"`
+	MaxPerBurst   int           `yaml:"max_requests_per_burst"`
+	MinPerBurst   int           `yaml:"min_requests_per_burst,omitempty"` // valeur optionnelle
+	BurstWindow   time.Duration `yaml:"burst_interval_seconds"`
+	JitterMean    time.Duration `yaml:"jitter_mean,omitempty"`      // valeur calculée ou fixe
+	BurstPauseMin time.Duration `yaml:"burst_pause_min,omitempty"` // intervalle optionnel
+	BurstPauseMax time.Duration `yaml:"burst_pause_max,omitempty"`
 }
 
+// Valeurs par défaut si certaines ne sont pas définies dans le YAML
 var StealthARP = StealthConfig{
-	MaxPerSecond: 3,
-	MinPerBurst:  2,
-	MaxPerBurst:  10,
-	JitterMean:   200 * time.Millisecond,
-	BurstWindow:  25 * time.Second,
+	MaxPerSecond:  3,
+	MinPerBurst:   2,
+	MaxPerBurst:   10,
+	JitterMean:    200 * time.Millisecond,
+	BurstWindow:   25 * time.Second,
 	BurstPauseMin: 1 * time.Second,
 	BurstPauseMax: 3 * time.Second,
 }
@@ -43,7 +44,7 @@ type Config struct {
 	LogLevel        string        `yaml:"log_level"`
 	ExcludeIPs      []string      `yaml:"exclude_ips"`
 	Scan            ScanConfig    `yaml:"scan"`
-	Stealth         StealthConfig `yaml:"stealth"` // ← configuration du scan furtif
+	Stealth         StealthConfig `yaml:"stealth_scan"` // correspond à la clé YAML
 }
 
 // Charge et parse le fichier de configuration YAML
@@ -56,6 +57,18 @@ func LoadConfig(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+
+	// Appliquer les valeurs par défaut si certains champs sont manquants
+	if cfg.Stealth.MaxPerSecond == 0 {
+		cfg.Stealth.MaxPerSecond = StealthARP.MaxPerSecond
+	}
+	if cfg.Stealth.MaxPerBurst == 0 {
+		cfg.Stealth.MaxPerBurst = StealthARP.MaxPerBurst
+	}
+	if cfg.Stealth.BurstWindow == 0 {
+		cfg.Stealth.BurstWindow = StealthARP.BurstWindow
+	}
+
 	return &cfg, nil
 }
 

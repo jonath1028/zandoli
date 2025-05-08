@@ -24,7 +24,7 @@ func AnalyzeDHCP(packet gopacket.Packet) {
 		return
 	}
 
-	host.ProtocolsSeen["dhcp"] = true
+	host.ProtocolsSeen["DHCP"] = true
 
 	for _, opt := range dhcp.Options {
 		switch opt.Type {
@@ -41,4 +41,3 @@ func AnalyzeDHCP(packet gopacket.Packet) {
 
 	logger.Logger.Debug().Msgf("[DHCP] Updated host %s with DHCP info", host.IP)
 }
-

@@ -22,7 +22,6 @@ type Summary struct {
 
 // Exporté globalement pour accès cross-module
 var SecuritySummary = Summary{
-	MACWithMultipleIPs:  make(map[string][]net.IP),
-	IPWithMultipleMACs:  make(map[string][]net.HardwareAddr),
+	MACWithMultipleIPs: make(map[string][]net.IP),
+	IPWithMultipleMACs: make(map[string][]net.HardwareAddr),
 }
-

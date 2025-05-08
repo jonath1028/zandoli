@@ -56,7 +56,7 @@ sudo ./zandoli --mode=combined --interface=eth0 --config=conf/config.yaml
 
 ```yaml
 interface: eth0
-oui_path: conf/oui.txt
+oui_path: asset/oui.txt
 capture_timeout_seconds: 300
 
 arp_stealth:
@@ -69,6 +69,17 @@ exclude_subnets:
   - 192.168.1.0/24
 
 ---
+### JSON output
+[
+  {
+    "ip": "192.168.1.12",
+    "mac": "00:11:22:33:44:55",
+    "vendor": "Cisco Systems",
+    "role": "Gateway",
+    "anomalies": ["mac_duplication"]
+  }
+]
+
 
 ## 🧪 Typical Use Cases
 
@@ -88,14 +99,15 @@ exclude_subnets:
 
 ---
 
-## 🛣 Roadmap
+## Architecture
 
-Planned enhancements are tracked in [`TODO.md`](./TODO.md), including:
+Zandoli operates in layered stages:
+1. Capture (pcap live/offline via gopacket)
+2. Analysis (protocol-specific parsing: LLDP, DHCP, etc.)
+3. Classification (host roles, anomalies, subnet discovery)
+4. Export (JSON/CSV/HTML real-time rendering)
 
-* Real-time TUI interface
-* Microservice-based execution model
-* Plugin system for dynamic analyzers
-* Advanced fingerprinting and protocol support
+Each stage is isolated and testable.
 
 ---
 

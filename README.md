@@ -8,11 +8,9 @@
 
 * **Passive Discovery** via LLDP, DHCP, ARP, VLAN tagging, EAPOL
 * **Active ARP Scanning** with both standard and stealth modes (unicast, no retries)
-* **Lightweight OS Fingerprinting** using SYN/SYN-ACK patterns on configurable ports
 * **Anomaly Detection**: identify duplicated MACs, IP conflicts, or irregular bindings
 * **Subnet Auto-Discovery**: dynamically detect /24 subnets for targeted scanning
 * **MAC Vendor Identification** through OUI file parsing
-* **Offline `.pcap` Parsing** to extract passive data from captured sessions
 * **Real-Time Export** to JSON, CSV, and HTML formats
 * **Execution Modes**: `--passive`, `--active`, `--combined`, `--pcap`
 * **Timeouts & Signal Handling**: graceful exits and global scan duration control

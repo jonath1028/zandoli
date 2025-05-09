@@ -69,7 +69,7 @@ Zandoli is a stealth-focused internal reconnaissance tool developed in Go for pe
 ### 📦 Installation
 
 ```bash
-git clone https://github.com/yourname/zandoli.git
+git clone https://github.com/jonath1028/zandoli.git
 cd zandoli
 chmod +x install.sh
 sudo ./install.sh

@@ -122,4 +122,3 @@ func ScanARPStealth(ifaceName string) {
 	close(stop)
 	logger.Logger.Info().Msg("[STEALTH] Stealth ARP scan complete.")
 }
-

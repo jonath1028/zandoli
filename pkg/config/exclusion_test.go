@@ -58,4 +58,3 @@ func TestLoadExcludedSubnets(t *testing.T) {
 		}
 	}
 }
-

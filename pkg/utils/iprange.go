@@ -27,4 +27,3 @@ func IPsInSubnet(subnet *net.IPNet, exclude net.IP) <-chan net.IP {
 	}()
 	return ch
 }
-

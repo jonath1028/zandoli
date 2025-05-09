@@ -45,4 +45,3 @@ func TestAnalyzeMDNS_MinimalDetection(t *testing.T) {
 		t.Errorf("expected mDNS to be marked as seen, but it was not")
 	}
 }
-

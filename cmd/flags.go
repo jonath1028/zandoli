@@ -16,33 +16,35 @@ var (
 	activeTypeOverride    string
 	timeoutOverride       int
 	enableVerbose         bool
+	pcapPath              string
 )
 
 func initFlags() {
 	flag.StringVar(&configPath, "config", "assets/config.yaml", "Path to the configuration YAML file")
 	flag.BoolVar(&showHelp, "h", false, "Show this help message")
-	flag.BoolVar(&enableSubnetExclusion, "exclude-subnets", false, "Enable exclusion of IPs from assets/excluded_subnets.txt")
+	flag.BoolVar(&enableSubnetExclusion, "exclude-subnets", false, "Enable exclusion of IPs from assets/excluded_hosts.txt")
 
 	flag.StringVar(&ifaceOverride, "iface", "", "Override interface defined in config file (e.g., eth0)")
 	flag.StringVar(&modeOverride, "mode", "", "Override scan mode: passive, active, combined, or pcap")
+	flag.StringVar(&pcapPath, "pcap", "", "Path to .pcap file (used if mode=pcap)")
 	flag.IntVar(&timeoutOverride, "timeout", 0, "Override passive sniffing duration (in seconds)")
 	flag.BoolVar(&enableVerbose, "verbose", false, "Enable verbose logging output (equivalent to log_level=debug)")
 
 	flag.Usage = func() {
 		fmt.Println("\nZandoli - Network Recon Tool (Red Team Edition)")
-		fmt.Println("Author: Jonathan Nomed\n")
+		fmt.Print("Author: Jonathan Nomed\n")
 
 		fmt.Println("Overview:")
 		fmt.Println("  Zandoli is a stealth-oriented reconnaissance tool designed for internal Red Team operations.")
 		fmt.Println("  It passively and actively maps the local network, detects anomalies, classifies hosts,")
-		fmt.Println("  and exports results in JSON, CSV and HTML formats.\n")
+		fmt.Print("  and exports results in JSON, CSV and HTML formats.\n")
 
 		fmt.Println("Usage:")
-		fmt.Println("  zandoli [flags]\n")
+		fmt.Print("  zandoli [flags]\n")
 
 		fmt.Println("Flags:")
 		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Printf("  -%-18s %s (default: %v)\n", f.Name, f.Usage, f.DefValue)
+			fmt.Printf("  -%-20s %s (default: %v)\n", f.Name, f.Usage, f.DefValue)
 		})
 
 		fmt.Println("\nHow It Works:")
@@ -51,21 +53,22 @@ func initFlags() {
 		fmt.Println("    active    → sends ARP requests to identify hosts (standard or stealth mode)")
 		fmt.Println("    combined  → runs passive first, then active")
 		fmt.Println("    pcap      → analyzes a PCAP file instead of live capture")
-		fmt.Println("  The scan mode and active type are set in config.yaml or overridden via flags.\n")
+		fmt.Print("  The scan mode and active type are set in config.yaml or overridden via flags.\n")
 
 		fmt.Println("Examples:")
 		fmt.Println("  zandoli -config assets/config.yaml")
 		fmt.Println("  zandoli --iface eth0 --mode combined --exclude-subnets")
-		fmt.Println("  zandoli --help\n")
+		fmt.Println("  zandoli --mode pcap --pcap test.pcap")
+		fmt.Print("  zandoli --help\n")
 
 		fmt.Println("Notes:")
 		fmt.Println("  - Run as root for interface access.")
 		fmt.Println("  - Output files are stored in the path defined by 'output_dir' in config.")
-		fmt.Println("  - Excluded IP ranges must be listed in assets/excluded_subnets.txt.")
-		fmt.Println("  - CLI flags override values defined in the configuration file.\n")
+		fmt.Println("  - Excluded IP ranges must be listed in assets/excluded_hosts.txt.")
+		fmt.Print("  - CLI flags override values defined in the configuration file.\n")
 
 		fmt.Println("Documentation:")
-		fmt.Println("  https://github.com/ton-repo/zandoli (coming soon)")
+		fmt.Print("  https://github.com/ton-repo/zandoli (coming soon)\n")
 	}
 }
 

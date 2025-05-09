@@ -12,9 +12,9 @@ import (
 func TestAnalyzeLLMNR_MinimalDetection(t *testing.T) {
 	// 1. Simuler une réponse LLMNR
 	llmnr := &dns.DNS{
-		ID:     0x1234,
-		QR:     true,
-		OpCode: 0,
+		ID:      0x1234,
+		QR:      true,
+		OpCode:  0,
 		QDCount: 1,
 		ANCount: 1,
 	}
@@ -51,4 +51,3 @@ func TestAnalyzeLLMNR_MinimalDetection(t *testing.T) {
 		t.Errorf("expected LLMNR to be marked as seen, but it was not")
 	}
 }
-

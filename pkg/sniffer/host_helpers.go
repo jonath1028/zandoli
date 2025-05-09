@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 )
 
 var DiscoveredNetworks = map[string]bool{}
@@ -58,3 +59,44 @@ func isPrivateIP(ip net.IP) bool {
 	}
 	return false
 }
+
+// GetOrCreateHostByMAC retourne un pointeur vers l’hôte correspondant au MAC, ou le crée s’il n’existe pas
+func GetOrCreateHostByMAC(mac string) *Host {
+	for i := range DiscoveredHosts {
+		if DiscoveredHosts[i].MACStr == mac {
+			return &DiscoveredHosts[i]
+		}
+	}
+
+	newHost := Host{
+		MACStr:         mac,
+		Timestamp:      time.Now(),
+		ProtocolsSeen:  make(map[string]bool),
+		Protocols:      make(map[string]bool),
+		Metadata:       make(map[string]string),
+	}
+
+	DiscoveredHosts = append(DiscoveredHosts, newHost)
+	return &DiscoveredHosts[len(DiscoveredHosts)-1]
+}
+
+// GetOrCreateHostByIP retourne un pointeur vers l’hôte correspondant à l’IP, ou le crée s’il n’existe pas
+func GetOrCreateHostByIP(ip net.IP) *Host {
+	for i := range DiscoveredHosts {
+		if DiscoveredHosts[i].IP.Equal(ip) {
+			return &DiscoveredHosts[i]
+		}
+	}
+
+	newHost := Host{
+		IP:             ip,
+		Timestamp:      time.Now(),
+		ProtocolsSeen:  make(map[string]bool),
+		Protocols:      make(map[string]bool),
+		Metadata:       make(map[string]string),
+	}
+
+	DiscoveredHosts = append(DiscoveredHosts, newHost)
+	return &DiscoveredHosts[len(DiscoveredHosts)-1]
+}
+

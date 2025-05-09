@@ -19,7 +19,7 @@ type StealthConfig struct {
 	MaxPerBurst   int           `yaml:"max_requests_per_burst"`
 	MinPerBurst   int           `yaml:"min_requests_per_burst,omitempty"` // valeur optionnelle
 	BurstWindow   time.Duration `yaml:"burst_interval_seconds"`
-	JitterMean    time.Duration `yaml:"jitter_mean,omitempty"`      // valeur calculée ou fixe
+	JitterMean    time.Duration `yaml:"jitter_mean,omitempty"`     // valeur calculée ou fixe
 	BurstPauseMin time.Duration `yaml:"burst_pause_min,omitempty"` // intervalle optionnel
 	BurstPauseMax time.Duration `yaml:"burst_pause_max,omitempty"`
 }
@@ -71,4 +71,3 @@ func LoadConfig(path string) (*Config, error) {
 
 	return &cfg, nil
 }
-

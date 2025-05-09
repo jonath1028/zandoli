@@ -25,4 +25,3 @@ func DecodeUTF16(utf16 []uint16) string {
 	}
 	return buf.String()
 }
-

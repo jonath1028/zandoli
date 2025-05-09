@@ -94,4 +94,3 @@ func StartPassiveSniff(iface string, duration int) <-chan gopacket.Packet {
 
 	return packetChan
 }
-

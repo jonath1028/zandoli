@@ -1,4 +1,4 @@
-package analyzer
+package service
 
 import (
 	"net"

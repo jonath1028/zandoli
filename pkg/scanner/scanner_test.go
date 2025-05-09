@@ -17,4 +17,3 @@ func TestIterateIPs(t *testing.T) {
 		t.Errorf("expected %d IPs, got %d", len(expected), len(ips))
 	}
 }
-

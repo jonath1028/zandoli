@@ -27,5 +27,3 @@ func TestIPsInSubnet(t *testing.T) {
 		}
 	}
 }
-
-

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"zandoli/pkg/sniffer"
 	"net"
+	"zandoli/pkg/sniffer"
 )
 
 func TestExportAll(t *testing.T) {
@@ -48,4 +48,3 @@ func mustParseMAC(mac string) net.HardwareAddr {
 	}
 	return addr
 }
-

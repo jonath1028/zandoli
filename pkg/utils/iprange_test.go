@@ -13,4 +13,3 @@ func TestIncIP(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, ip.String())
 	}
 }
-

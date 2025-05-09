@@ -36,4 +36,3 @@ func TestClassifyHost(t *testing.T) {
 		})
 	}
 }
-

@@ -1,119 +1,154 @@
-# Zandoli
+# Zandoli – Stealth Internal Network Reconnaissance
 
-**Zandoli** is a stealthy internal network reconnaissance tool designed for professional penetration testers. It combines passive traffic analysis with selective active probing to map and assess internal infrastructures without triggering defensive mechanisms or raising noise. The tool emphasizes operational discretion, clean design, and real-time visibility.
-
----
-
-## 🔍 Key Features
-
-* **Passive Discovery** via LLDP, DHCP, ARP, VLAN tagging, EAPOL
-* **Active ARP Scanning** with both standard and stealth modes (unicast, no retries)
-* **Anomaly Detection**: identify duplicated MACs, IP conflicts, or irregular bindings
-* **Subnet Auto-Discovery**: dynamically detect /24 subnets for targeted scanning
-* **MAC Vendor Identification** through OUI file parsing
-* **Real-Time Export** to JSON, CSV, and HTML formats
-* **Execution Modes**: `--passive`, `--active`, `--combined`, `--pcap`
-* **Timeouts & Signal Handling**: graceful exits and global scan duration control
-* **Configurable Interface, Exclusions, and Rate Limits** via YAML
+Zandoli is a stealth-focused internal reconnaissance tool developed in Go for penetration testers operating in monitored corporate environments. It answers the need for discreet asset discovery by combining passive sniffing and active ARP scanning, enabling early-phase infrastructure mapping without triggering detection. Designed to run on Linux jumpboxes or analyst machines, it is best suited for use during internal assessments or when analyzing offline packet captures.
 
 ---
 
-## 📦 Installation
+## 🔧 Core Features
 
-### Requirements
+- **Passive Reconnaissance**
+  - Captures LLDP, ARP, DHCP, EAPOL, and VLAN traffic
+  - Zero packet injection; no interaction with hosts
 
-* [Go](https://golang.org/doc/install) 1.20+
-* Dependencies:
+- **Active ARP Scanning**
+  - Unicast probing in jittered, rate-limited bursts
+  - Normal and stealth modes
 
-```bash
-go get github.com/google/gopacket@v1.1.19
-go get github.com/rs/zerolog@v1.34.0
-go get github.com/cheggaaa/pb/v3@v3.1.7
-go get gopkg.in/yaml.v2@v2.4.0
+- **Host Classification**
+  - MAC OUI lookup for vendor inference
+  - Auto-categorization of hosts
+
+- **Anomaly Detection**
+  - Detects IP/MAC inconsistencies and duplicate assets
+
+- **Offline Analysis**
+  - Full `.pcap` support for post-capture inspection
+
+- **Structured Export**
+  - JSON, CSV and static HTML reports
+
+- **Hardened Runtime**
+  - Graceful SIGINT handling, timeout support, interface validation
+
+---
+
+## 🎯 Use Cases for Pentesters
+
+- Discreetly map internal subnets during on-site or VPN-based engagements
+- Perform reconnaissance from a jumpbox or compromised workstation without triggering EDR or NAC alerts
+- Leverage `.pcap` files for passive post-exploitation infrastructure mapping
+- Validate network segmentation and identify unmanaged or rogue devices
+- Identify asset density and device types within poorly segmented VLANs
+
+---
+
+## 📊 Recon Workflow
+
+```
+[ Interface Setup ]
+        ↓
+[ Passive Capture ]
+        ↓
+[ Active ARP Scan (Optional) ]
+        ↓
+[ Packet Analysis ]
+        ↓
+[ Host Classification ]
+        ↓
+[ Anomaly Detection ]
+        ↓
+[ Report Generation ]
+        ↓
+[ Export to JSON / CSV / HTML ]
 ```
 
-### Build
+---
+
+## 🚀 Quickstart
+
+### 📦 Installation
 
 ```bash
-git clone https://github.com/your-org/zandoli.git
+git clone https://github.com/yourname/zandoli.git
 cd zandoli
-go build -o zandoli ./zandoli
+chmod +x install.sh
+sudo ./install.sh
 ```
 
----
-
-## ⚙️ Usage
+### ⚙️ Sample Commands
 
 ```bash
-sudo ./zandoli --mode=combined --interface=eth0 --config=conf/config.yaml
+# Passive only
+sudo ./zandoli --mode passive --config assets/config.yaml
+
+# Stealth ARP only
+sudo ./zandoli --mode active --config assets/config.yaml
+
+# Combined scan
+sudo ./zandoli --mode combined --config assets/config.yaml
+
+# Offline pcap analysis
+sudo ./zandoli --mode pcap --file capture.pcap --config assets/config.yaml
+
+# Display help
+./zandoli -h
 ```
 
-* `--mode`: passive | active | combined | pcap
-* `--interface`: network interface (mandatory)
-* `--config`: path to YAML configuration file
-
-### Sample `config.yaml`
-
-```yaml
-interface: eth0
-oui_path: asset/oui.txt
-capture_timeout_seconds: 300
-
-arp_stealth:
-  enabled: true
-  max_requests_per_burst: 10
-  max_bursts_per_25s: 1
-  delay_between_requests: "random(55-95)"
-
-exclude_subnets:
-  - 192.168.1.0/24
-
 ---
-### JSON output
-[
-  {
-    "ip": "192.168.1.12",
-    "mac": "00:11:22:33:44:55",
-    "vendor": "Cisco Systems",
-    "role": "Gateway",
-    "anomalies": ["mac_duplication"]
-  }
-]
 
+## 🧬 Configuration Variables
 
-## 🧪 Typical Use Cases
+**Path:** `assets/config.yaml`
 
-* Silent internal network enumeration during a grey-box engagement
-* VLAN discovery and misconfiguration analysis
-* Detection of rogue bridges or misconfigured multi-homed hosts
-* Pre-exploitation reconnaissance to guide lateral movement
+| Variable                    | Description                                         | Example               |
+|-----------------------------|-----------------------------------------------------|------------------------|
+| `iface`                     | Interface to use                                    | `eth0`                |
+| `log_level`                 | Logging verbosity (`debug`, `info`, `warn`, ...)    | `info`                |
+| `log_file`                  | Log output file path                                | `output/log.txt`      |
+| `output_dir`                | Output directory for results                        | `output/`             |
+| `oui_path`                  | Path to OUI vendor database                         | `assets/oui.txt`      |
+| `stealth_arp.jitter_min`    | Min delay between ARP packets (ms)                 | `55000`               |
+| `stealth_arp.jitter_max`    | Max delay between ARP packets (ms)                 | `95000`               |
+| `stealth_arp.burst_rate`    | Max ARP packets per burst                           | `3`                   |
+| `stealth_arp.burst_window`  | Time window per burst (sec)                         | `25`                  |
 
 ---
 
-## ⚠️ Limitations
+## 📁 Project Structure
 
-* IPv6 is not supported in this version
-* No SNMP or NetBIOS enumeration
-* Only tested on Linux platforms
-* No live dashboard or API interface (planned)
-
----
-
-## Architecture
-
-Zandoli operates in layered stages:
-1. Capture (pcap live/offline via gopacket)
-2. Analysis (protocol-specific parsing: LLDP, DHCP, etc.)
-3. Classification (host roles, anomalies, subnet discovery)
-4. Export (JSON/CSV/HTML real-time rendering)
-
-Each stage is isolated and testable.
+```
+├── cmd/                 → CLI entrypoint
+├── pkg/
+│   ├── analyzer/        → Protocol-specific analyzers (LLDP, ARP, ...)
+│   ├── scanner/         → Active scanners (ARP)
+│   ├── sniffer/         → Passive packet capture
+│   └── utils/           → Shared logic and helpers
+├── assets/              → Config file, oui.txt
+├── output/              → Generated results
+├── script/              → Auxiliary tools (OUI processing, etc.)
+└── install.sh           → Dependency setup and build script
+```
 
 ---
 
-## 👤 Author
+## 📈 Roadmap
 
-Developed and maintained by **Jonathan**, offensive security engineer.
-Zandoli is designed to be **simple, tactical, and effective** for real-world operations.
+- [ ] **Semi-passive OS fingerprinting** using controlled SYN packets
+- [ ] **Passive protocol enrichment** (extract hostnames, domains, NBNS, DHCP options)
+- [ ] **Enhanced passive heuristics** to infer device types and operating roles
+- [ ] **Vendor classification enrichment**
+- [ ] **Plugin support for new protocol analyzers**
+- [ ] **Memory optimizations using circular buffers**
 
 ---
+
+## ⚖️ License & Disclaimer
+
+Zandoli is intended strictly for legal use in authorized environments.  
+Unauthorized use is prohibited. The authors accept no responsibility for misuse.
+
+---
+
+## 🤝 Contributions
+
+Pull requests are welcome. All contributions must comply with the project’s modular architecture, interface segregation, and security guidelines.

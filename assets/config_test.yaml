@@ -1,0 +1,10 @@
+iface: lo
+passive_duration: 5
+log_level: debug
+log_file: /dev/stdout
+output_dir: /tmp/zandoli_test_output
+
+scan:
+  mode: passive
+  active_type: ""
+

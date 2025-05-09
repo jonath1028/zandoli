@@ -1,4 +1,4 @@
-package analyzer
+package service
 
 import (
 	"net"
@@ -9,14 +9,14 @@ import (
 	"zandoli/pkg/sniffer"
 )
 
-func AnalyzeLLMNR(packet gopacket.Packet) {
+func AnalyzeMDNS(packet gopacket.Packet) {
 	udpLayer := packet.Layer(layers.LayerTypeUDP)
 	if udpLayer == nil {
 		return
 	}
 	udp := udpLayer.(*layers.UDP)
 
-	if udp.SrcPort != 5355 && udp.DstPort != 5355 {
+	if udp.SrcPort != 5353 && udp.DstPort != 5353 {
 		return
 	}
 
@@ -32,19 +32,18 @@ func AnalyzeLLMNR(packet gopacket.Packet) {
 
 	ipLayer := packet.NetworkLayer()
 	if ipLayer == nil {
-		logger.Logger.Debug().Msg("[LLMNR] No IP layer found")
+		logger.Logger.Debug().Msg("[mDNS] No IP layer found")
 		return
 	}
 	srcIP := ipLayer.NetworkFlow().Src().Raw()
 
 	host := sniffer.FindHostByIP(net.IP(srcIP))
 	if host == nil {
-		logger.Logger.Debug().Msg("[LLMNR] Host not found")
+		logger.Logger.Debug().Msg("[mDNS] Host not found")
 		return
 	}
 
-	host.ProtocolsSeen["LLMNR"] = true
+	host.ProtocolsSeen["mDNS"] = true
 	sniffer.ClassifyHost(host)
-	logger.Logger.Debug().Msgf("[LLMNR] Protocol detected for host %s", host.IP)
+	logger.Logger.Debug().Msgf("[mDNS] Protocol detected for host %s", host.IP)
 }
-

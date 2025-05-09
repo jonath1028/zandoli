@@ -10,24 +10,24 @@ import (
 
 type Host struct {
 	IP              net.IP           `json:"ip"`
-	MAC             net.HardwareAddr `json:"-"`
+	MAC             net.HardwareAddr `json:"-"` 
 	MACStr          string           `json:"mac"`
 	Timestamp       time.Time        `json:"timestamp"`
 	DetectionMethod string           `json:"detection_method"`
 	Vendor          string           `json:"vendor"`
 	Category        string           `json:"category"`
 
-	// Champs enrichis par l’analyse passive
-	Hostname      string            `json:"hostname,omitempty"`
-	DomainName    string            `json:"domain_name,omitempty"`
-	ProtocolsSeen map[string]bool   `json:"protocols_seen,omitempty"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
+	Hostname      string            `json:"hostname"`       
+	DomainName    string            `json:"domain_name"`    
+	ProtocolsSeen map[string]bool   `json:"protocols_seen"` 
+	Protocols     map[string]bool   `json:"protocols"`      
+	Metadata      map[string]string `json:"metadata"`       
 }
 
 // NewHost crée un nouvel hôte découvert sur le réseau
 func NewHost(ip net.IP, mac net.HardwareAddr, method string) Host {
 	vendor := oui.GetVendor(mac.String())
-	category := oui.GuessCategory(vendor)
+	category := oui.GetVendorCategory(vendor)
 
 	h := Host{
 		IP:              ip,
@@ -37,9 +37,8 @@ func NewHost(ip net.IP, mac net.HardwareAddr, method string) Host {
 		DetectionMethod: method,
 		Vendor:          vendor,
 		Category:        category,
-		Hostname:        "",
-		DomainName:      "",
 		ProtocolsSeen:   make(map[string]bool),
+		Protocols:       make(map[string]bool),
 		Metadata:        make(map[string]string),
 	}
 
@@ -72,7 +71,7 @@ func ClassifyHost(h *Host) {
 	case h.ProtocolsSeen["CDP"] || h.ProtocolsSeen["LLDP"] || h.ProtocolsSeen["STP"]:
 		h.Category = "network"
 	default:
-		h.Category = oui.GuessCategory(h.Vendor) // fallback
+		h.Category = oui.GetVendorCategory(h.Vendor)
 	}
 
 	logger.Logger.Debug().Msgf("[DEBUG] ClassifyHost() => IP=%s Category=%s (based on protocols)", h.IP, h.Category)

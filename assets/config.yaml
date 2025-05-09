@@ -11,7 +11,7 @@ output_dir: output
 log_file: log/zandoli.log
 
 # niveau d affichage de log 
-log_level: debug  # trace | debug | info | warn | error | fatal | panic | disabled
+log_level: error  # trace | debug | info | warm | error | fatal | panic | disabled
 
 
 # Liste d’IP à exclure du scan actif
@@ -21,7 +21,7 @@ exclude_ips:
 
 # Mode de scan global
 scan:
-  mode: active         # passive | active | combined | pcap
+  mode: combined         # passive | active | combined | pcap
   active_type: standard   # standard | stealth (valide seulement si mode = active ou combined)
 
 # Paramètres pour le scan ARP furtif

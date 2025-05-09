@@ -1,4 +1,4 @@
-package analyzer
+package layer2
 
 import "github.com/google/gopacket"
 

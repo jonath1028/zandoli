@@ -1,4 +1,4 @@
-package analyzer
+package meta
 
 import (
 	"bytes"
@@ -29,4 +29,3 @@ func decodeUTF16(utf16 []uint16) string {
 }
 
 // isValidSMBName applique des heuristiques simples (longueur, printable, etc.)
-

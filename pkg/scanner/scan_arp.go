@@ -74,4 +74,3 @@ func ScanARP(ifaceName string) {
 	close(stop)
 	logger.Logger.Info().Msg("Active ARP scan complete")
 }
-

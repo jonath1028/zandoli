@@ -9,6 +9,7 @@ import (
 	"zandoli/pkg/config"
 	"zandoli/pkg/export"
 	"zandoli/pkg/logger"
+	"zandoli/pkg/offline"
 	"zandoli/pkg/oui"
 	"zandoli/pkg/scanner"
 	"zandoli/pkg/sniffer"
@@ -21,7 +22,7 @@ func main() {
 	if enableSubnetExclusion {
 		err := config.LoadExclusions("assets/excluded_hosts.txt")
 		if err != nil {
-			fmt.Printf("Failed to load exclusion list: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Failed to load exclusion list: %v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -29,7 +30,7 @@ func main() {
 	// === Load config ===
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		fmt.Printf("Failed to load config: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -48,15 +49,6 @@ func main() {
 	}
 	if enableVerbose {
 		cfg.LogLevel = "debug"
-	}
-
-	// === Load excluded subnets if flag is set ===
-	if enableSubnetExclusion {
-		err := config.LoadExclusions("assets/excluded_hosts.txt")
-		if err != nil {
-			fmt.Printf("Failed to load subnet exclusion list: %v\n", err)
-			os.Exit(1)
-		}
 	}
 
 	// === Init logging ===
@@ -94,14 +86,28 @@ func main() {
 		}
 		runActive(cfg)
 
+	case "pcap":
+		logger.Logger.Info().Msg("Running in PCAP analysis mode")
+		offline.AnalyzePCAPWithDiagnostics(pcapPath)
+		offline.AnalyzeFromPCAP(pcapPath)
+
+		for _, h := range sniffer.DiscoveredHosts {
+			if len(h.ProtocolsSeen) > 0 {
+				fmt.Printf("Host %s → Protocols: ", h.MACStr)
+				for proto := range h.ProtocolsSeen {
+					fmt.Printf("%s ", proto)
+				}
+				fmt.Println()
+			}
+		}
+		return
+
 	default:
 		logger.Logger.Fatal().Msgf("Invalid scan mode: %s", cfg.Scan.Mode)
 	}
 
 	// === Export results ===
 	logger.Logger.Info().Msgf("Exporting %d discovered hosts...", len(sniffer.DiscoveredHosts))
-
-	// Ensure output directory exists
 	if _, err := os.Stat(cfg.OutputDir); os.IsNotExist(err) {
 		err := os.MkdirAll(cfg.OutputDir, 0755)
 		if err != nil {
@@ -110,15 +116,12 @@ func main() {
 	}
 
 	err = export.ExportAll(sniffer.DiscoveredHosts, cfg.OutputDir, cfg.Iface, cfg.PassiveDuration)
-
-
 	if err != nil {
 		logger.Logger.Error().Err(err).Msg("Failed to export results")
 		os.Exit(1)
 	}
-	logger.Logger.Info().Msg("Export completed successfully.")
 
-	// === Display summary ===
+	logger.Logger.Info().Msg("Export completed successfully.")
 	ui.DisplaySummary(sniffer.DiscoveredHosts)
 	logger.Logger.Info().Msg("Zandoli finished.")
 }

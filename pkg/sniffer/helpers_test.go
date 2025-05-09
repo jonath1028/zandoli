@@ -45,4 +45,3 @@ func TestUpdateHostDNS(t *testing.T) {
 		t.Errorf("expected 'dns' in ProtocolsSeen")
 	}
 }
-

@@ -7,7 +7,6 @@ set -e
 # Version: 1.0
 # Target: Debian/Ubuntu
 # Author: Jonathan NOMED
-# License: Apache 2.0
 # ════════════════════════════════════════════════════════════════════════
 
 echo "[+] Starting Zandoli installation..."

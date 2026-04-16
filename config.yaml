@@ -1,0 +1,138 @@
+# ==========================================================================
+# Zandoli — Reference Configuration
+# ==========================================================================
+# CLI flags override these values. See --help for all available flags.
+#
+# Profile presets: "stealth", "normal", "aggressive", "passive-only"
+# Set a profile to apply its defaults, then override individual values below.
+# Priority: CLI flags > YAML values > profile defaults > hardcoded defaults.
+
+profile: "normal"
+
+# Network interface for live capture.
+# Adjust for your machine: eth0, ens33, wlan0, etc.
+interface: "eth0"
+
+# ==========================================================================
+# Execution mode (only one may be active at a time)
+# ==========================================================================
+mode:
+  passive: true              # Passive listening only (default)
+  active: false              # Active scanning (ARP + SYN)
+  combined: false            # Passive first, then targeted active scan
+  pcap: ""                   # Path to a PCAP file (empty = live capture)
+  syn: false                 # Enable SYN scan on unidentified hosts
+
+# ==========================================================================
+# Scan parameters
+# ==========================================================================
+scan:
+  # Duration of the passive capture phase in seconds. Range: >= 0.
+  passive_duration_seconds: 120
+
+  # TTL for active scan packets. Range: 1-255.
+  ttl: 64
+
+  # TCP ports to scan during SYN phase. Each port must be in [1, 65535].
+  syn_ports: [22, 80, 443, 445, 3389, 8080, 8443]
+
+  # IPs or CIDRs to exclude from scanning (e.g., ["192.168.0.1", "10.0.0.0/8"]).
+  blacklist: []
+
+  # Use targeted mode: only scan IPs discovered during passive phase.
+  targeted: false
+
+  # -- ARP scanning settings --
+  arp:
+    # Maximum ARP packets per second. Range: 1-1000. Default: 3.
+    max_per_sec: 3
+
+    # Maximum packets per burst window. Range: 1-10000. Default: 10.
+    burst: 10
+
+    # Minimum delay between bursts in milliseconds. Range: >= 0. Default: 500.
+    burst_min_delay_ms: 500
+
+    # Maximum delay between bursts in milliseconds. Range: >= 0. Default: 2000.
+    # Must be >= burst_min_delay_ms.
+    burst_max_delay_ms: 2000
+
+  # -- SYN scanning settings --
+  syn:
+    # Timeout per SYN probe in milliseconds. Range: 100-30000. Default: 1500.
+    timeout_ms: 1500
+
+    # SYN microburst size range (packets per burst).
+    microburst_min: 1
+    microburst_max: 2
+
+    # Pause between SYN microbursts in milliseconds.
+    pause_min_ms: 50
+    pause_max_ms: 200
+
+    # Random jitter added between SYN probes in milliseconds.
+    jitter_min_ms: 10
+    jitter_max_ms: 100
+
+  # -- Stealth Hybrid Regulation --
+  # Controls the randomized rate limiting for ARP scanning to avoid detection.
+  # All min/max pairs must satisfy: min <= max.
+  stealth:
+    # Packets per second range.
+    max_per_second_min: 1
+    max_per_second_max: 5
+
+    # Burst window size range (packets).
+    max_burst_per_window_min: 2
+    max_burst_per_window_max: 8
+
+    # Burst window duration range (seconds).
+    burst_window_seconds_min: 10
+    burst_window_seconds_max: 30
+
+    # Microburst size range (packets per micro-burst).
+    microburst_min: 1
+    microburst_max: 3
+
+    # Pause between microbursts in milliseconds.
+    pause_min_ms: 100
+    pause_max_ms: 500
+
+  # -- Performance and metrics --
+  performance:
+    # Enable performance metrics collection. Default: true.
+    enable_metrics: true
+
+    # Sample every Nth packet for metrics (0 = all packets). Default: 0.
+    metrics_sample_rate: 0
+
+    # Number of parallel analysis workers (0 = sequential). Default: 0.
+    parallel_workers: 0
+
+# ==========================================================================
+# Logging
+# ==========================================================================
+logging:
+  verbose: false             # Enable detailed debug logging
+  quiet: false               # Reduce log output (files only, no console)
+  paranoid: false            # No log output at all on stdout
+
+# ==========================================================================
+# Output
+# ==========================================================================
+output:
+  # Root directory for scan results. Each scan creates a timestamped subdirectory.
+  base_dir: "output"
+
+  # Export formats to generate. Supported: json, csv, html, xml, markdown, ipset.
+  formats: [json, csv, html]
+
+  # Record live traffic to a PCAP file alongside results.
+  record_pcap: false
+
+  # OUI database source. "embedded" uses the built-in database.
+  # Set a file path to use a custom oui.txt.
+  oui_file: "embedded"
+
+  # Include public (non-RFC1918) subnets in HTML/JSON reports.
+  allow_public_subnets: false

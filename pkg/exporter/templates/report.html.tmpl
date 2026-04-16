@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Zandoli Network Recon Report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+:root{
+  --brand:#245645;
+  --brandDark:#112C25;
+  --bg:#f6fbf9;
+  --text:#0b1a15;
+  --muted:#6c757d;
+  --tableBorder:#dee2e6;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:var(--bg);color:var(--text)}
+.header{
+  background: linear-gradient(90deg,var(--brand),var(--brandDark));
+  color:#fff; padding:14px 20px; display:flex; align-items:center; gap:12px;
+}
+.header .logo{max-height:40px; display:block}
+.header .title{font-size:20px; font-weight:700; letter-spacing:.5px}
+.main{padding:20px}
+h1{display:none} /* legacy title hidden but kept for tests if any */
+h2{border-bottom:1px solid var(--brand); padding-bottom:4px; margin-top:24px}
+.table-wrap{overflow-x:auto}
+table{border-collapse:collapse; width:100%; margin-top:10px}
+th,td{border:1px solid var(--tableBorder); padding:8px; text-align:left; font-size:14px}
+th{background:var(--brandDark); color:#fff}
+tr:nth-child(even){background:#eef5f2}
+.anomaly{color:#b30000; font-weight:700}
+.badge{display:inline-block; padding:2px 8px; border-radius:999px; background:rgba(36,86,69,.12); color:var(--brand); font-size:12px}
+.anomaly-badge{display:inline-block; padding:3px 8px; border-radius:4px; font-size:11px; margin:1px; font-weight:500}
+.anomaly-badge.high{background:#ffebee; color:#c62828; border:1px solid #ffcdd2}
+.anomaly-badge.medium{background:#fff3e0; color:#ef6c00; border:1px solid #ffcc02}
+.anomaly-badge.low{background:#f3e5f5; color:#7b1fa2; border:1px solid #e1bee7}
+.anomaly-params{font-size:10px; color:#666; margin-left:4px}
+.footer{font-size:12px; color:var(--muted); margin-top:40px; border-top:1px solid #ccc; padding:10px 0}
+.nowrap{white-space:nowrap}
+.stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 30px 0; }
+.stat-card { background: white; border-radius: 10px; padding: 20px; text-align: center; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+.stat-number { font-size: 2em; font-weight: bold; color: var(--brand); }
+.stat-label { color: var(--muted); margin-top: 5px; }
+.section { background: white; border-radius: 15px; padding: 30px; margin-bottom: 30px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+.search-box { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; margin-bottom: 20px; }
+.filter-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+.filter-tab { padding: 10px 20px; background: #ecf0f1; border: none; border-radius: 5px; cursor: pointer; }
+.filter-tab.active { background: var(--brand); color: white; }
+.l2-summary { font-size: 12px; line-height: 1.2; }
+.l2-item { margin: 2px 0; }
+.l2-item strong { color: var(--brand); }
+.capabilities { color: #666; font-size: 11px; }
+.vlan-breakdown { color: #666; font-size: 11px; }
+.badge[aria-pressed="true"], .filter-tab.active { outline: 0; }
+.confidence { color: #28a745; font-weight: bold; }
+.signals { color: #6c757d; font-size: 11px; }
+.muted { color: var(--muted); font-style: italic; }
+.summary-table { margin: 20px 0; }
+.summary-table table { font-size: 13px; }
+.summary-table th { text-align: center; }
+.summary-table td { text-align: center; }
+.summary-table .count { font-weight: bold; color: var(--brand); }
+.subnet-link { cursor: pointer; color: var(--brand); text-decoration: underline; }
+.subnet-link:hover { color: var(--brandDark); }
+@media (max-width: 768px) {
+  .main { padding: 10px; }
+  .stats-grid { grid-template-columns: 1fr; }
+  table { font-size: 0.9em; }
+}
+.lang-toggle { background:#fff; color:var(--brandDark); border:1px solid rgba(0,0,0,0.1); padding:6px 10px; border-radius:8px; cursor:pointer; font-size:14px; margin-left:auto; }
+.lang-toggle:hover { background:#f0f3f2; }
+</style>
+</head>
+<body>
+  <header class="header">
+    {{if .LogoPath}}<img src="{{.LogoPath}}" alt="Zandoli logo" class="logo"/>{{end}}
+    <div class="title" data-i18n="title_report">Rapport de reconnaissance Zandoli — <span style="opacity:0.8;font-size:0.85em">Alpha</span></div>
+    <button id="langToggle" class="lang-toggle" data-i18n="toggle_label" data-i18n-attr="title:toggle_title">English</button>
+  </header>
+  <main class="main">
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-number">{{.TotalHosts}}</div>
+        <div class="stat-label" data-i18n="hosts_discovered">Hôtes Découverts</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">{{len .TopologySubnets}}</div>
+        <div class="stat-label" data-i18n="subnets">Sous-réseaux</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-number">{{.Version}}</div>
+        <div class="stat-label" data-i18n="version">Version</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 data-i18n="summary_global">📊 Résumé Global</h2>
+      <div class="summary-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Constructeurs</th>
+              <th>Catégories</th>
+              <th>Rôles</th>
+              <th>Protocoles</th>
+              <th>Sources</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                {{if .Summary.Vendors}}
+                  {{range $i, $vendor := .Summary.Vendors}}
+                    {{if $i}}<br/>{{end}}
+                    <strong>{{$vendor.Key}}:</strong> <span class="count">{{$vendor.Value}}</span>
+                  {{end}}
+                {{else}}
+                  <span class="muted">Aucun</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .Summary.Categories}}
+                  {{range $i, $category := .Summary.Categories}}
+                    {{if $i}}<br/>{{end}}
+                    <strong>{{$category.Key}}:</strong> <span class="count">{{$category.Value}}</span>
+                  {{end}}
+                {{else}}
+                  <span class="muted">Aucune</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .Summary.Roles}}
+                  {{range $i, $role := .Summary.Roles}}
+                    {{if $i}}<br/>{{end}}
+                    <strong>{{$role.Key}}:</strong> <span class="count">{{$role.Value}}</span>
+                  {{end}}
+                {{else}}
+                  <span class="muted">Aucun</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .Summary.Protocols}}
+                  {{range $i, $protocol := .Summary.Protocols}}
+                    {{if $i}}<br/>{{end}}
+                    <strong>{{$protocol.Key}}:</strong> <span class="count">{{$protocol.Value}}</span>
+                  {{end}}
+                {{else}}
+                  <span class="muted">Aucun</span>
+                {{end}}
+              </td>
+              <td>
+                {{if .Summary.Sources}}
+                  {{range $i, $source := .Summary.Sources}}
+                    {{if $i}}<br/>{{end}}
+                    <strong>{{$source.Key}}:</strong> <span class="count">{{$source.Value}}</span>
+                  {{end}}
+                {{else}}
+                  <span class="muted">Aucune</span>
+                {{end}}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 data-i18n="hosts_discovered_h2">🖥️ Hôtes Découverts</h2>
+      <input type="text" class="search-box" placeholder="Rechercher un hôte..." id="hostSearch" data-i18n-attr="placeholder:search_placeholder">
+      <div class="filter-tabs" role="tablist" aria-label="Filtrer par rôle">
+        <button class="filter-tab active" onclick="filterHosts(event,'all')" aria-pressed="true" data-i18n="filter_all">Tous</button>
+        <button class="filter-tab" onclick="filterHosts(event,'client')" aria-pressed="false" data-i18n="filter_clients">Clients</button>
+        <button class="filter-tab" onclick="filterHosts(event,'server')" aria-pressed="false" data-i18n="filter_servers">Serveurs</button>
+        <button class="filter-tab" onclick="filterHosts(event,'reseau')" aria-pressed="false" data-i18n="filter_network">Réseaux</button>
+      </div>
+      <div class="table-wrap">
+        <table id="hostsTable">
+          <thead>
+            <tr>
+              <th data-i18n="th_ipv4">IP (IPv4)</th>
+              <th data-i18n="th_ipv6">IPv6</th>
+              <th data-i18n="th_mac">MAC</th>
+              <th data-i18n="th_vendor">Constructeur</th>
+              <th data-i18n="th_hostname">Hostname</th>
+              <th data-i18n="th_role">Rôle</th>
+              <th data-i18n="th_category">Catégorie</th>
+              <th data-i18n="th_ttl">TTL</th>
+              <th data-i18n="th_ttlavg">TTL Moy.</th>
+              <th data-i18n="th_os">OS (Score)</th>
+              <th data-i18n="th_arp_only">ARP uniquement</th>
+              <th data-i18n="th_source">Source</th>
+              <th data-i18n="th_services_tcp">TCP</th>
+              <th data-i18n="th_services_udp">UDP</th>
+              <th data-i18n="th_protocols">Protocoles</th>
+              <th data-i18n="th_l2_details">Détails L2</th>
+              <th data-i18n="th_vlan">VLAN</th>
+              <th data-i18n="th_first_seen">Première vue</th>
+              <th data-i18n="th_last_seen">Dernière vue</th>
+              <th data-i18n="th_pkt_count">Paquets</th>
+              <th data-i18n="th_anomalies">Anomalies</th>
+              <th data-i18n="th_info">Info</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .HostsPrivateOnly}}
+            {{$allIPs := appendIPs .IPs .IP}}
+            {{$ipSelection := selectPrivateIPs $allIPs}}
+            <tr data-role="{{if .Role}}{{normalizeRole .Role}}{{else}}unknown{{end}}">
+              <td data-ipv4="{{$ipSelection.IPv4Primary}}" data-ipv4-all="{{join $ipSelection.IPv4All ","}}"
+                  aria-label="{{if $ipSelection.IPv4Primary}}Adresse IPv4 principale: {{$ipSelection.IPv4Primary}}{{if gt (len $ipSelection.IPv4Others) 0}} ({{len $ipSelection.IPv4Others}} supplémentaire{{if gt (len $ipSelection.IPv4Others) 1}}s{{end}}){{end}}{{else}}Aucune adresse IPv4{{end}}"
+                  title="{{if gt (len $ipSelection.IPv4Others) 0}}{{join $ipSelection.IPv4Others ", "}}{{end}}">
+                <strong>{{if $ipSelection.IPv4Primary}}{{$ipSelection.IPv4Primary}}{{if gt (len $ipSelection.IPv4Others) 0}} (+{{len $ipSelection.IPv4Others}}){{end}}{{else}}—{{end}}</strong>
+              </td>
+              <td data-ipv6="{{$ipSelection.IPv6Primary}}" data-ipv6-all="{{join $ipSelection.IPv6All ","}}"
+                  aria-label="{{if $ipSelection.IPv6Primary}}Adresse IPv6 principale: {{$ipSelection.IPv6Primary}}{{if gt (len $ipSelection.IPv6Others) 0}} ({{len $ipSelection.IPv6Others}} supplémentaire{{if gt (len $ipSelection.IPv6Others) 1}}s{{end}}){{end}}{{else}}Aucune adresse IPv6{{end}}"
+                  title="{{if gt (len $ipSelection.IPv6Others) 0}}{{join $ipSelection.IPv6Others ", "}}{{end}}">
+                {{if $ipSelection.IPv6Primary}}<code>{{$ipSelection.IPv6Primary}}{{if gt (len $ipSelection.IPv6Others) 0}} (+{{len $ipSelection.IPv6Others}}){{end}}</code>{{else}}—{{end}}
+              </td>
+              <td><code>{{if .MACStr}}{{.MACStr}}{{else if .MAC}}{{.MAC.String}}{{else}}—{{end}}</code></td>
+              <td>{{if .Vendor}}{{.Vendor}}{{else}}—{{end}}</td>
+              <td>{{if .Hostname}}{{.Hostname}}{{else}}—{{end}}</td>
+              <td title="{{if .RoleSignals}}Signals: {{join .RoleSignals ","}}{{if .RoleConfidence}} | Confidence: {{.RoleConfidence}}%{{end}}{{end}}">
+                {{if .Role}}
+                  <strong>{{roleLabel .Role}}</strong>
+                  {{if .RoleConfidence}}<br><small class="confidence">Confidence: {{.RoleConfidence}}%</small>{{end}}
+                  {{if .RoleSignals}}<br><small class="signals">Signals: {{join .RoleSignals ","}}</small>{{end}}
+                {{else}}
+                  Unknown
+                {{end}}
+              </td>
+              <td>{{if .Category}}{{.Category}}{{else}}—{{end}}</td>
+              <td>{{if .TTL}}{{.TTL}}{{else}}—{{end}}</td>
+              <td>{{formatUint8 .TTLAvg}}</td>
+              <td>{{if .OSGuess}}{{.OSGuess}}{{if .OSScore}} ({{.OSScore}}){{end}}{{if .OSSignals}} [{{join .OSSignals ","}}]{{end}}{{else}}—{{end}}</td>
+              <td>{{if .OnlyARP}}Oui{{else}}Non{{end}}</td>
+              <td><span class="badge">{{if .Source}}{{.Source}}{{else}}—{{end}}</span></td>
+              <td class="nowrap">{{formatServices .Services.TCP}}</td>
+              <td class="nowrap">{{formatServices .Services.UDP}}</td>
+              <td>{{range $i, $p := .Protocols}}{{if $i}} {{end}}<span class="badge">{{$p}}</span>{{end}}</td>
+              <td>{{renderL2Summary .}}</td>
+              <td>{{renderVLANCell .}}</td>
+              <td class="nowrap">{{formatTime .FirstSeen}}</td>
+              <td class="nowrap">{{formatTime .LastSeen}}</td>
+              <td>{{formatUint64 .PacketCount}}</td>
+              <td>{{anomalyCount .Anomalies}}</td>
+              <td>{{if .Info}}{{.Info}}{{else}}—{{end}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2 data-i18n="subnets_h2">🌐 Sous-réseaux</h2>
+      {{if .SubnetClassInfo}}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th data-i18n="th_class">Classe</th>
+                <th data-i18n="th_subnets">Sous-réseaux</th>
+                <th data-i18n="th_ip_addresses">Adresses IP</th>
+              </tr>
+            </thead>
+            <tbody>
+              {{range .SubnetClassInfo}}
+              <tr>
+                <td><strong>{{.Class}}</strong></td>
+                <td>
+                  {{if .Subnets}}
+                    {{range $i, $subnet := .Subnets}}
+                      {{if $i}}<br/>{{end}}
+                      <code class="subnet-link" onclick="filterBySubnet('{{$subnet}}')">{{$subnet}}</code>
+                    {{end}}
+                  {{else}}
+                    <span class="muted">Aucun</span>
+                  {{end}}
+                </td>
+                <td>
+                  {{if .IPs}}
+                    {{limitIPsDisplay .IPs 30}}
+                  {{else}}
+                    <span class="muted">Aucune</span>
+                  {{end}}
+                </td>
+              </tr>
+              {{end}}
+            </tbody>
+          </table>
+        </div>
+      {{else}}
+        <p class="muted">Aucun sous-réseau détecté.</p>
+      {{end}}
+    </div>
+
+  </main>
+  <div class="footer">Zandoli &copy; {{.GeneratedAt}} | Version: {{.Version}} | <strong>Alpha</strong></div>
+
+  <script>
+(function(){
+  "use strict";
+
+  // ===== Utils =====
+  const text = (el)=> (el && el.textContent || "").trim();
+  const isIPv6 = (ip)=> ip.includes(":");
+  const isIPv4 = (ip)=> /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
+  const ROLE_MAP = {
+    client:"client", server:"server",
+    reseau:"reseau", "réseau":"reseau",
+    switch:"reseau", router:"reseau", network_device:"reseau", repeater:"reseau", access_point:"reseau"
+  };
+  const L2_ONLY = new Set(["ARP","NDP"]);
+
+  // RFC1918 + CGNAT
+  function isPrivateIPv4(ip){
+    if (!isIPv4(ip)) return false;
+    const [a,b] = ip.split(".").map(x=>parseInt(x,10));
+    if (a===10) return true;
+    if (a===172 && b>=16 && b<=31) return true;
+    if (a===192 && b===168) return true;
+    // CGNAT 100.64.0.0/10
+    if (a===100 && b>=64 && b<=127) return true;
+    return false;
+  }
+
+  // ===== Column index helper =====
+  function colIndex(headerText){
+    const ths = Array.from(document.querySelectorAll('#hostsTable thead th'));
+    return ths.findIndex(th=> text(th).toLowerCase() === headerText.toLowerCase());
+  }
+
+  // ===== Normalisations DOM =====
+
+  // 1) Aligner data-role sur le rôle affiché (pour que le filtre fonctionne même si backend a divergé)
+  function realignDatasetRole(){
+    const roleIdx = colIndex('Rôle');
+    if (roleIdx < 0) return;
+    document.querySelectorAll('#hostsTable tbody tr').forEach(tr=>{
+      const roleCell = tr.children[roleIdx];
+      const strong = roleCell ? roleCell.querySelector('strong') : null;
+      const role = text(strong).toLowerCase();
+      if (ROLE_MAP[role]) tr.dataset.role = ROLE_MAP[role];
+    });
+  }
+
+  // 2) Assainir IP "<nil>" -> "—"
+  function sanitizeNilIP(){
+    document.querySelectorAll('#hostsTable tbody tr td:first-child strong')
+      .forEach(el => {
+        const v = text(el).toLowerCase();
+        if (v === '<nil>' || v === '') el.textContent = '—';
+      });
+  }
+
+  // 3) TTL: "0" -> "—", masquer la colonne si 100% vide
+  function normalizeTTL(){
+    const ths = Array.from(document.querySelectorAll('#hostsTable thead th'));
+    const ttlIdx = ths.findIndex(th=> text(th).toLowerCase() === 'ttl');
+    if (ttlIdx < 0) return;
+    const cells = Array.from(document.querySelectorAll('#hostsTable tbody td:nth-child(' + (ttlIdx+1) + ')'));
+    let allEmpty = true;
+    cells.forEach(td=>{
+      const v = text(td);
+      if (v === '0' || v === '') td.textContent = '—';
+      if (text(td) !== '—') allEmpty = false;
+    });
+    if (allEmpty){
+      document.querySelectorAll('#hostsTable tr').forEach(tr=>{
+        const c = tr.children[ttlIdx];
+        if (c) c.style.display = 'none';
+      });
+    }
+  }
+
+  // 4) IPv6: ARP -> NDP (si l'hôte n'a pas d'IPv4)
+  function ipv6ArpToNdp(){
+    const protoIdx = colIndex('Protocoles');
+    if (protoIdx < 0) return;
+    document.querySelectorAll('#hostsTable tbody tr').forEach(tr=>{
+      const ip = text(tr.querySelector('td:first-child strong'));
+      if (!isIPv6(ip)) return;
+      const protosCell = tr.children[protoIdx];
+      if (!protosCell) return;
+      protosCell.querySelectorAll('.badge').forEach(b=>{
+        if (text(b) === 'ARP') b.textContent = 'NDP';
+      });
+    });
+  }
+
+  // 5) Recalculer "ARP uniquement" = Oui ssi protocole ∈ {ARP,NDP} exclusivement
+  function recomputeOnlyARP(){
+    const ths = Array.from(document.querySelectorAll('#hostsTable thead th'));
+    const onlyIdx = ths.findIndex(th=>{
+      const t = text(th).toLowerCase();
+      return t.includes('onlyarp') || t.includes('arp uniquement');
+    });
+    const protoIdx = ths.findIndex(th=> text(th).toLowerCase().startsWith('protoc'));
+    if (onlyIdx<0 || protoIdx<0) return;
+    document.querySelectorAll('#hostsTable tbody tr').forEach(tr=>{
+      const protos = Array.from(tr.children[protoIdx].querySelectorAll('.badge')).map(b=> text(b));
+      const only = protos.length>0 && protos.every(p=> L2_ONLY.has(p));
+      tr.children[onlyIdx].textContent = only ? 'Oui' : 'Non';
+    });
+  }
+
+  // 6) VLAN breakdown: corriger l'étiquette et la classe si l'ancien markup utilisait .capabilities
+  function fixVlanBreakdown(){
+    document.querySelectorAll('.l2-summary .capabilities').forEach(el=>{
+      const raw = text(el);
+      // Heuristique: si ça ressemble à une liste "VLANID: N frames"
+      if (/^\d+:\s*\d+\s*frames?/m.test(raw) || /^\s*\d+\s*:\s*/.test(raw)) {
+        // Ajouter un label explicite "VLANs (trames):"
+        const label = document.createElement('div');
+        label.innerHTML = '<strong>VLANs (trames):</strong>';
+        el.parentNode.insertBefore(label, el);
+        el.classList.add('vlan-breakdown');
+        el.classList.remove('capabilities');
+      }
+    });
+  }
+
+
+  // 8) i18n FR : entêtes et titre
+  function i18nHeaders(){
+    // Titre
+    const title = document.querySelector('.header .title');
+    if (title) title.textContent = 'Rapport de reconnaissance Zandoli';
+
+    // Entêtes table hôtes
+    const map = { 'role':'Rôle', 'protocols':'Protocoles', 'l2 details':'Détails L2', 'onlyarp':'ARP uniquement' };
+    document.querySelectorAll('#hostsTable thead th').forEach(th=>{
+      const key = text(th).toLowerCase();
+      if (map[key]) th.textContent = map[key];
+    });
+  }
+
+  // 9) Avis si IP publiques détectées (et non listées dans Sous-réseaux)
+  function publicIPNotice(){
+    const rows = document.querySelectorAll('#hostsTable tbody tr');
+    let hasPublic = false;
+    rows.forEach(tr=>{
+      const ip = text(tr.querySelector('td:first-child strong'));
+      if (isIPv4(ip) && !isPrivateIPv4(ip)) hasPublic = true;
+    });
+    if (!hasPublic) return;
+
+    const subnetH2 = Array.from(document.querySelectorAll('.section h2'))
+      .find(h=> text(h).toLowerCase().includes('sous-réseaux'));
+    if (!subnetH2) return;
+
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = "Note : des adresses IP publiques ont été observées et ne sont pas agrégées dans le tableau des sous-réseaux privés.";
+    // Insérer la note juste sous le H2 si elle n'existe pas encore
+    const parent = subnetH2.parentElement;
+    const already = parent.querySelector('.muted');
+    if (!already) parent.insertBefore(note, subnetH2.nextSibling);
+  }
+
+  // ===== Recherche avec debounce (all visible text) =====
+  function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+  const applySearch = debounce(function(term){
+    term = (term || "").toLowerCase();
+    const rows = document.querySelectorAll('#hostsTable tbody tr');
+    rows.forEach(row=>{
+      // Récupérer toutes les IPs depuis les attributs data
+      const ipv4All = row.querySelector('td:nth-child(1)')?.getAttribute('data-ipv4-all') || '';
+      const ipv6All = row.querySelector('td:nth-child(2)')?.getAttribute('data-ipv6-all') || '';
+      const rowText = text(row).toLowerCase();
+
+      const show = rowText.includes(term) || ipv4All.toLowerCase().includes(term) || ipv6All.toLowerCase().includes(term);
+      row.style.display = show ? '' : 'none';
+    });
+  }, 150);
+
+  const searchEl = document.getElementById('hostSearch');
+  if (searchEl) searchEl.addEventListener('input', function(){ applySearch(this.value); });
+
+  // ===== Filtres par rôle (onglets) =====
+  window.filterHosts = function(evt, role){
+    const rows = document.querySelectorAll('#hostsTable tbody tr');
+    document.querySelectorAll('.filter-tab').forEach(t=>{
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed','false');
+    });
+    if (evt && evt.currentTarget){
+      evt.currentTarget.classList.add('active');
+      evt.currentTarget.setAttribute('aria-pressed','true');
+    }
+    rows.forEach(row=>{
+      row.style.display = (role === 'all' || (row.dataset.role||'') === role) ? '' : 'none';
+    });
+  };
+
+  // ===== Filtrage par sous-réseau (IPv4 et IPv6) =====
+  window.filterBySubnet = function(cidr){
+    const rows = document.querySelectorAll('#hostsTable tbody tr');
+    let visibleCount = 0;
+    
+    rows.forEach(row=>{
+      // Vérifier si l'hôte appartient au sous-réseau via les nouvelles colonnes IPv4/IPv6
+      let belongsToSubnet = false;
+      
+      // Récupérer toutes les IPs depuis les attributs data-ipv4-all et data-ipv6-all
+      const ipv4All = row.querySelector('td:nth-child(1)')?.getAttribute('data-ipv4-all') || '';
+      const ipv6All = row.querySelector('td:nth-child(2)')?.getAttribute('data-ipv6-all') || '';
+      
+      const ips = [];
+      if (ipv4All) ips.push(...ipv4All.split(',').map(ip => ip.trim()).filter(ip => ip));
+      if (ipv6All) ips.push(...ipv6All.split(',').map(ip => ip.trim()).filter(ip => ip));
+      
+      // Vérifier si au moins une IP appartient au CIDR
+      for (const ip of ips) {
+        if (ip && ip.trim() !== '') {
+          try {
+            if (isIPv6(ip.trim())) {
+              // Traitement IPv6
+              belongsToSubnet = isIPv6InSubnet(ip.trim(), cidr);
+            } else if (isIPv4(ip.trim())) {
+              // Traitement IPv4 (code existant)
+              const [networkStr, prefixLen] = cidr.split('/');
+              const prefix = parseInt(prefixLen, 10);
+              
+              const ipBytes = ip.trim().split('.').map(x => parseInt(x, 10));
+              const networkBytes = networkStr.split('.').map(x => parseInt(x, 10));
+              
+              if (ipBytes.length === 4 && networkBytes.length === 4) {
+                let mask = 0;
+                for (let i = 0; i < prefix; i++) {
+                  mask |= (1 << (31 - i));
+                }
+                
+                const ipInt = (ipBytes[0] << 24) | (ipBytes[1] << 16) | (ipBytes[2] << 8) | ipBytes[3];
+                const networkInt = (networkBytes[0] << 24) | (networkBytes[1] << 16) | (networkBytes[2] << 8) | networkBytes[3];
+                
+                if ((ipInt & mask) === (networkInt & mask)) {
+                  belongsToSubnet = true;
+                }
+              }
+            }
+            
+            if (belongsToSubnet) break;
+          } catch (e) {
+            continue;
+          }
+        }
+      }
+      
+      row.style.display = belongsToSubnet ? '' : 'none';
+      if (belongsToSubnet) visibleCount++;
+    });
+    
+    // Mettre à jour la recherche pour refléter le filtre
+    const searchEl = document.getElementById('hostSearch');
+    if (searchEl) {
+      searchEl.value = 'subnet:' + cidr;
+      searchEl.placeholder = 'Filtré par sous-réseau: ' + cidr + ' (' + visibleCount + ' hôtes)';
+    }
+    
+    // Réinitialiser les onglets de rôle
+    document.querySelectorAll('.filter-tab').forEach(t=>{
+      t.classList.remove('active');
+      t.setAttribute('aria-pressed','false');
+    });
+    document.querySelector('.filter-tab[onclick*="all"]').classList.add('active');
+    document.querySelector('.filter-tab[onclick*="all"]').setAttribute('aria-pressed','true');
+  };
+
+  // Fonction pour vérifier si une IPv6 appartient à un sous-réseau
+  function isIPv6InSubnet(ip, cidr) {
+    try {
+      const [networkStr, prefixLen] = cidr.split('/');
+      const prefix = parseInt(prefixLen, 10);
+      
+      // Parser l'IPv6 et le réseau
+      const ipBytes = parseIPv6(ip);
+      const networkBytes = parseIPv6(networkStr);
+      
+      if (!ipBytes || !networkBytes) return false;
+      
+      // Calculer le masque IPv6
+      const maskBytes = new Uint8Array(16);
+      for (let i = 0; i < 16; i++) {
+        const bitsInThisByte = Math.min(8, Math.max(0, prefix - i * 8));
+        maskBytes[i] = bitsInThisByte === 8 ? 0xFF : (0xFF << (8 - bitsInThisByte)) & 0xFF;
+      }
+      
+      // Vérifier si l'IP appartient au réseau
+      for (let i = 0; i < 16; i++) {
+        if ((ipBytes[i] & maskBytes[i]) !== (networkBytes[i] & maskBytes[i])) {
+          return false;
+        }
+      }
+      
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  
+  // Parser IPv6 en bytes
+  function parseIPv6(ip) {
+    try {
+      // Gérer les adresses IPv6 compressées
+      let expanded = ip;
+      if (ip.includes('::')) {
+        const parts = ip.split('::');
+        const leftParts = parts[0] ? parts[0].split(':') : [];
+        const rightParts = parts[1] ? parts[1].split(':') : [];
+        const totalParts = leftParts.length + rightParts.length;
+        const missingParts = 8 - totalParts;
+        
+        const middle = Array(missingParts).fill('0000');
+        expanded = [...leftParts, ...middle, ...rightParts].join(':');
+      }
+      
+      const parts = expanded.split(':');
+      if (parts.length !== 8) return null;
+      
+      const bytes = new Uint8Array(16);
+      for (let i = 0; i < 8; i++) {
+        const part = parts[i].padStart(4, '0');
+        bytes[i * 2] = parseInt(part.substr(0, 2), 16);
+        bytes[i * 2 + 1] = parseInt(part.substr(2, 2), 16);
+      }
+      
+      return bytes;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ===== Exécution =====
+  realignDatasetRole();
+  sanitizeNilIP();
+  normalizeTTL();
+  ipv6ArpToNdp();
+  recomputeOnlyARP();
+  fixVlanBreakdown();
+  i18nHeaders();
+  publicIPNotice();
+})();
+  </script>
+
+  <script>
+(function(){
+  "use strict";
+  const I18N = {
+    fr: {
+      title_report: "Rapport de reconnaissance Zandoli",
+      hosts_discovered: "Hôtes Découverts",
+      subnets: "Sous-réseaux",
+      version: "Version",
+      summary_global: "📊 Résumé Global",
+      hosts_discovered_h2: "🖥️ Hôtes Découverts",
+      subnets_h2: "🌐 Sous-réseaux",
+      filter_all: "Tous",
+      filter_clients: "Clients",
+      filter_servers: "Serveurs",
+      filter_network: "Réseaux",
+      th_ipv4: "IP (IPv4)",
+      th_ipv6: "IPv6",
+      th_mac: "MAC",
+      th_vendor: "Constructeur",
+      th_hostname: "Hostname",
+      th_role: "Rôle",
+      th_category: "Catégorie",
+      th_ttl: "TTL",
+      th_ttlavg: "TTL Moy.",
+      th_os: "OS (Score)",
+      th_arp_only: "ARP uniquement",
+      th_source: "Source",
+      th_services_tcp: "TCP",
+      th_services_udp: "UDP",
+      th_protocols: "Protocoles",
+      th_l2_details: "Détails L2",
+      th_vlan: "VLAN",
+      th_first_seen: "Première vue",
+      th_last_seen: "Dernière vue",
+      th_pkt_count: "Paquets",
+      th_anomalies: "Anomalies",
+      th_info: "Info",
+      th_class: "Classe",
+      th_subnets: "Sous-réseaux",
+      th_ip_addresses: "Adresses IP",
+      search_placeholder: "Rechercher un hôte...",
+      toggle_label: "English",
+      toggle_title: "Basculer l'interface en anglais",
+      role_client: "Client",
+      role_server: "Serveur",
+      role_network: "Réseau"
+    },
+    en: {
+      title_report: "Zandoli Network Recon Report",
+      hosts_discovered: "Discovered Hosts",
+      subnets: "Subnets",
+      version: "Version",
+      summary_global: "📊 Global Summary",
+      hosts_discovered_h2: "🖥️ Discovered Hosts",
+      subnets_h2: "🌐 Subnets",
+      filter_all: "All",
+      filter_clients: "Clients",
+      filter_servers: "Servers",
+      filter_network: "Network",
+      th_ipv4: "IPv4",
+      th_ipv6: "IPv6",
+      th_mac: "MAC",
+      th_vendor: "Vendor",
+      th_hostname: "Hostname",
+      th_role: "Role",
+      th_category: "Category",
+      th_ttl: "TTL",
+      th_ttlavg: "TTL Avg",
+      th_os: "OS (Score)",
+      th_arp_only: "ARP only",
+      th_source: "Source",
+      th_services_tcp: "TCP",
+      th_services_udp: "UDP",
+      th_protocols: "Protocols",
+      th_l2_details: "L2 Details",
+      th_vlan: "VLAN",
+      th_first_seen: "First Seen",
+      th_last_seen: "Last Seen",
+      th_pkt_count: "Packets",
+      th_anomalies: "Anomalies",
+      th_info: "Info",
+      th_class: "Class",
+      th_subnets: "Subnets",
+      th_ip_addresses: "IP Addresses",
+      search_placeholder: "Search a host...",
+      toggle_label: "Français",
+      toggle_title: "Switch the interface to French",
+      role_client: "Client",
+      role_server: "Server",
+      role_network: "Network"
+    }
+  };
+
+  function getLang(){
+    const ls = localStorage.getItem("zandoli_lang");
+    if (ls) return ls;
+    const nav = (navigator.language || "fr").toLowerCase().startsWith("en") ? "en" : "fr";
+    return nav;
+  }
+
+  function applyLang(lang){
+    const dict = I18N[lang] || I18N.fr;
+    document.documentElement.setAttribute("lang", lang);
+    // text nodes
+    document.querySelectorAll("[data-i18n]").forEach(el=>{
+      const key = el.getAttribute("data-i18n");
+      if (dict[key]) el.textContent = dict[key];
+    });
+    // attribute translations: data-i18n-attr="placeholder:key1;title:key2"
+    document.querySelectorAll("[data-i18n-attr]").forEach(el=>{
+      const spec = el.getAttribute("data-i18n-attr").split(";").map(s=>s.trim()).filter(Boolean);
+      for (const pair of spec){
+        const [attr, k] = pair.split(":").map(s=>s.trim());
+        if (attr && k && dict[k]) el.setAttribute(attr, dict[k]);
+      }
+    });
+    // toggle button label
+    const toggle = document.getElementById("langToggle");
+    if (toggle) {
+      toggle.textContent = dict.toggle_label || (lang==="fr"?"English":"Français");
+      if (dict.toggle_title) toggle.setAttribute("title", dict.toggle_title);
+    }
+    // Optional: map role labels if UI inserted plain text
+    const roleCol = colIndex('Rôle');
+    const roleNth = roleCol >= 0 ? roleCol + 1 : 6;
+    document.querySelectorAll('#hostsTable tbody tr td:nth-child(' + roleNth + ') strong').forEach(s=>{
+      const raw = s.textContent.trim().toLowerCase();
+      if (raw === "client" || raw === "serveur" || raw === "réseau" || raw === "reseau" || raw==="server" || raw==="network"){
+        const map = {fr:{client:"Client",server:"Serveur",network:"Réseau"}, en:{client:"Client",server:"Server",network:"Network"}};
+        let norm = raw.replace("réseau","reseau").replace("network","reseau").replace("server","serveur");
+        if (norm==="reseau") s.textContent = map[lang].network;
+        else if (norm==="serveur") s.textContent = map[lang].server;
+        else s.textContent = map[lang].client;
+      }
+    });
+  }
+
+  function setLang(lang){
+    localStorage.setItem("zandoli_lang", lang);
+    applyLang(lang);
+  }
+
+  // init
+  const current = getLang();
+  applyLang(current);
+
+  // hook button
+  const btn = document.getElementById("langToggle");
+  if (btn) {
+    btn.addEventListener("click", function(){
+      const next = (getLang()==="fr") ? "en" : "fr";
+      setLang(next);
+    });
+  }
+})();
+  </script>
+</body>
+</html>
+{{define "anomalyBadge"}}
+{{if .Type}}
+<span class="anomaly-badge {{.Severity}}">
+  {{.Type}}
+  {{if .Parameters}}
+    <span class="anomaly-params">
+      {{if eq .Type "arp_storm"}}
+        {{if .Parameters.pps}}({{.Parameters.pps}} pps){{end}}
+        {{if .Parameters.duration_s}} - {{.Parameters.duration_s}}s{{end}}
+      {{else if eq .Type "mac_multiple_ip"}}
+        {{if .Parameters.ips}}({{len .Parameters.ips}} IPs){{end}}
+      {{else if eq .Type "ip_duplicate"}}
+        {{if .Parameters.ip}}({{.Parameters.ip}}){{end}}
+      {{else if eq .Type "multiple_dhcp_servers"}}
+        {{if .Parameters.count}}({{.Parameters.count}} servers){{end}}
+      {{else if eq .Type "multiple_stp_roots"}}
+        {{if .Parameters.count}}({{.Parameters.count}} roots){{end}}
+      {{else if eq .Type "duplicate_hostname"}}
+        {{if .Parameters.hostname}}({{.Parameters.hostname}}){{end}}
+      {{end}}
+    </span>
+  {{end}}
+</span>
+{{else}}
+<span class="anomaly-badge {{.Severity}}">{{.Description}}</span>
+{{end}}
+{{end}}

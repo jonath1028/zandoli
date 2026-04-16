@@ -1,0 +1,52 @@
+# ─────────────────────────────────────────────
+# Zandoli — repo-specific .gitignore
+# ─────────────────────────────────────────────
+
+# Build artifacts
+build/
+/zandoli
+*.exe
+*.out
+
+# Scan outputs
+output/
+result/
+
+# Logs
+*.log
+
+# PCAP files (binary, used for manual testing)
+*.pcap
+*.pcapng
+*.CAP
+*.cap
+
+# Large archives
+testdata/The-Ultimate-PCAP/
+*.7z
+
+# Local configuration overrides
+*.local.yaml
+*.secret.yaml
+*.private.yaml
+
+# Local tool config
+.claude/
+
+# Local test configurations
+config/
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE / editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+.DS_Store
+Thumbs.db
+*.tmp
+*~

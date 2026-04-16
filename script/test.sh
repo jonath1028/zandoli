@@ -1,0 +1,10 @@
+echo -e "\033[90m================ ZANDOLI SUMMARY ================\033[0m"
+echo -e "\033[97mScan ID      :\033[0m \033[92m20250520-203900\033[0m"
+echo -e "\033[97mProfile      :\033[0m \033[92mdefault\033[0m"
+echo -e "\033[97mTotal Hosts  :\033[0m \033[92m9\033[0m"
+echo -e "\033[97mFrom Passive :\033[0m \033[92m5\033[0m"
+echo -e "\033[97mFrom Active  :\033[0m \033[92m4\033[0m"
+echo -e "\033[97mWith Anomaly :\033[0m \033[92m4\033[0m"
+echo -e "\033[97mExported To  :\033[0m \033[92moutput/scan_20250520-203900/\033[0m"
+echo -e "\033[90m==================================================\033[0m"
+
